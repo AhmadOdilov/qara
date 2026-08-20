@@ -1,0 +1,52 @@
+# Qara — produksiya qo'shimchasi (§P6 PHASE 11).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Asosiy `docker-compose.yml` ustiga qo'shiladi va uni O'ZGARTIRMAYDI:
+#   · ilova porti internetga BEVOSITA ochilmaydi (faqat Caddy ko'radi);
+#   · Postgres porti umuman ochilmaydi;
+#   · Caddy 80/443 da turadi va sertifikatni o'zi oladi.
+#
+# Kerakli o'zgaruvchilar (.env):
+#   SITE_DOMAIN=qara.uz
+#   ACME_EMAIL=admin@qara.uz
+#   TRUSTED_PROXY_HOPS=1     ← Caddy bitta proksi
+
+services:
+  db:
+    # Produksiyada baza host mashinada ham ko'rinmasin.
+    ports: !override []
+
+  app:
+    # Port endi faqat konteyner tarmog'ida. `expose` — tashqariga chiqarmaydi.
+    ports: !override []
+    expose:
+      - "3000"
+    environment:
+      # Caddy orqasida ishlaymiz: zanjirdagi eng o'ngdagi yozuv ishonchli.
+      TRUSTED_PROXY_HOPS: "${TRUSTED_PROXY_HOPS:-1}"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: qara-caddy
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN kerak}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL kerak}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Sertifikatlar saqlanadi — qayta ishga tushganda Let's Encrypt
+      # limitiga urilmaslik uchun SHART.
+      - qara-caddy-data:/data
+      - qara-caddy-config:/config
+
+volumes:
+  qara-caddy-data:
+  qara-caddy-config:

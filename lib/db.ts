@@ -1,5 +1,6 @@
 import "server-only";
 import { PrismaClient } from "@prisma/client";
+import { log } from "@/lib/log";
 
 // Dev'da Next.js modullarni qayta yuklaganda har safar yangi pool ochilmasligi
 // uchun klientni global obyektda saqlaymiz.
@@ -36,10 +37,13 @@ if (!globalForShutdown.qaraShutdownHooked && typeof process !== "undefined") {
     void prisma
       .$disconnect()
       .catch((error: unknown) => {
-        console.error("[shutdown] Prisma ulanishini yopib bo'lmadi:", error);
+        log.error("shutdown: Prisma ulanishini yopib bo'lmadi", {
+          signal,
+          reason: error instanceof Error ? error.message : "noma'lum",
+        });
       })
       .finally(() => {
-        console.info(`[shutdown] ${signal} — baza ulanishlari yopildi`);
+        log.info("shutdown: baza ulanishlari yopildi", { signal });
       });
   };
 

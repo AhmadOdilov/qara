@@ -1,0 +1,39 @@
+# Qara — reverse proxy va HTTPS (§P6 PHASE 11).
+#
+#   Internet → :443 (Caddy) → app:3000 → db:5432
+#
+# Caddy Let's Encrypt sertifikatini AVTOMATIK oladi va yangilaydi —
+# alohida certbot kerak emas. HTTP → HTTPS yo'naltirish ham o'zi bo'ladi.
+#
+# MUHIM: xavfsizlik sarlavhalari BU YERDA belgilanmaydi. Ular ilovaning
+# `proxy.ts` faylida, chunki ular yo'lga qarab o'zgaradi: `/mini-app/*`
+# Telegram iframe'ida ochilishi kerak, qolgan hamma narsa esa
+# `frame-ancestors 'none'`. Proksi ularni ustidan yozsa Mini App buzilardi.
+
+{
+	# Sertifikat muddati tugashi haqida ogohlantirish shu manzilga keladi.
+	email {$ACME_EMAIL}
+}
+
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	# Telegram webhook'lari va Mini App uzoq javob kutishi mumkin.
+	reverse_proxy app:3000 {
+		header_up X-Real-IP {remote_host}
+		# `X-Forwarded-For` ni Caddy o'zi to'g'ri to'ldiradi: klient
+		# yuborganini SAQLAB, o'ng tomonga o'zi ko'rgan manzilni qo'shadi.
+		# Shuning uchun ilovada TRUSTED_PROXY_HOPS=1 bo'lishi kerak.
+		transport http {
+			read_timeout 60s
+			write_timeout 60s
+		}
+	}
+
+	log {
+		output stdout
+		format json
+		# Sirlar log'ga tushmasin: Authorization va Cookie chiqarib tashlanadi.
+		# (Caddy standart holatda ham ularni yozmaydi, lekin ochiq belgilaymiz.)
+	}
+}

@@ -14,18 +14,42 @@ import {
   type AdminUserRow,
 } from "@/components/admin-tables";
 import { BotSettingsForm } from "@/components/bot-settings-form";
+import { Pager } from "@/components/pager";
+import { pageCount, pageRange, readPage } from "@/lib/pagination";
 
 export const metadata: Metadata = { title: "Admin" };
 
-export default async function AdminPage() {
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string; size?: string; q?: string }>;
+}) {
   const currentUser = await requireUser();
   const { t } = await getDictionary();
 
-  const [overview, users, messages, settings] = await Promise.all([
+  const params = await searchParams;
+  const { page, size, skip } = readPage(params);
+  const query = (params.q ?? "").trim().slice(0, 80);
+
+  // Qidiruv SERVER tomonda: ilgari klient faqat yuklangan 200 qatorni
+  // filtrlardi, ya'ni 201-chi foydalanuvchi topilmasdi.
+  const where = query
+    ? {
+        OR: [
+          { name: { contains: query, mode: "insensitive" as const } },
+          { email: { contains: query, mode: "insensitive" as const } },
+        ],
+      }
+    : {};
+
+  const [overview, userTotal, users, messages, settings] = await Promise.all([
     getOverview(periodStart(30)),
+    prisma.user.count({ where }),
     prisma.user.findMany({
+      where,
       orderBy: { createdAt: "desc" },
-      take: 200,
+      skip,
+      take: size,
       select: {
         id: true,
         name: true,
@@ -68,6 +92,9 @@ export default async function AdminPage() {
     createdAt: user.createdAt.toISOString(),
   }));
 
+  const pages = pageCount(userTotal, size);
+  const range = pageRange(page, size, userTotal);
+
   const messageRows: AdminMessageRow[] = messages.map((message) => ({
     id: message.id,
     userName: message.user.name,
@@ -100,7 +127,25 @@ export default async function AdminPage() {
         <section className="mt-6">
           <Card>
             <CardHeader title={t.admin.tabUsers} />
-            <UsersTable rows={userRows} currentUserId={currentUser.id} />
+            <UsersTable
+              rows={userRows}
+              currentUserId={currentUser.id}
+              query={query}
+            />
+            <Pager
+              page={page}
+              pages={pages}
+              from={range.from}
+              to={range.to}
+              total={userTotal}
+              basePath="/admin"
+              params={{ q: query, size: String(size) }}
+              labels={{
+                prev: t.common.prev,
+                next: t.common.next,
+                of: t.common.of,
+              }}
+            />
           </Card>
         </section>
 

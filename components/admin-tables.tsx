@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n/provider";
 import { api, formatDate, formatTime } from "@/lib/client";
 import { Alert, Badge, Button, Input } from "@/components/ui";
@@ -22,21 +22,40 @@ export type AdminUserRow = {
 export function UsersTable({
   rows,
   currentUserId,
+  query: initialQuery = "",
 }: {
   rows: AdminUserRow[];
   currentUserId: string;
+  /** URL'dagi joriy qidiruv — server tomonda qo'llanilgan. */
+  query?: string;
 }) {
   const { lang, t } = useI18n();
   const router = useRouter();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const filtered = query.trim()
-    ? rows.filter((row) =>
-        `${row.name} ${row.email}`.toLowerCase().includes(query.toLowerCase()),
-      )
-    : rows;
+  /*
+    Qidiruv endi SERVER tomonda.
+
+    Ilgari klient faqat yuklangan qatorlarni filtrlardi — 200-chidan
+    keyingi foydalanuvchi umuman topilmasdi. Endi so'rov URL'ga yoziladi va
+    server butun jadval bo'yicha qidiradi.
+
+    Debounce: har bosilgan harfda so'rov yubormaymiz.
+  */
+  useEffect(() => {
+    if (query === initialQuery) return;
+    const timer = setTimeout(() => {
+      const search = new URLSearchParams();
+      if (query.trim()) search.set("q", query.trim());
+      router.push(search.toString() ? `/admin?${search}` : "/admin");
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [query, initialQuery, router]);
+
+  // Server allaqachon filtrlagan — bu yerda qayta filtrlash shart emas.
+  const filtered = rows;
 
   async function toggleRole(row: AdminUserRow) {
     setPendingId(row.id);

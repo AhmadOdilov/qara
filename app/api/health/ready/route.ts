@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { log } from "@/lib/log";
 
 /**
  * READINESS — «trafik qabul qilishga tayyormi?».
@@ -20,7 +21,9 @@ export async function GET() {
     await prisma.$queryRaw`SELECT 1`;
   } catch (error) {
     // Sabab faqat server logida qoladi.
-    console.error("[health/ready] baza javob bermadi:", error);
+    log.error("health/ready: baza javob bermadi", {
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
     return NextResponse.json(
       { status: "unavailable", database: "down" },
       { status: 503, headers: { "Cache-Control": "no-store" } },
@@ -51,7 +54,7 @@ export async function GET() {
   }
 
   if (migrations === "pending") {
-    console.error("[health/ready] tugallanmagan migratsiya bor");
+    log.error("health/ready: tugallanmagan migratsiya bor", { migrations });
     return NextResponse.json(
       { status: "unavailable", database: "up", migrations },
       { status: 503, headers: { "Cache-Control": "no-store" } },

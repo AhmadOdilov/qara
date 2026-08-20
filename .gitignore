@@ -41,3 +41,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .gstack/
+
+# Baza zaxira nusxalari — hech qachon repozitoriyga tushmasin
+/backups/
+*.dump
+*.sql.gz

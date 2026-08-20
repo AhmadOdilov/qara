@@ -944,3 +944,60 @@ Cron misoli:
 Boshlang'ich uchun yetarli: 2 vCPU, 2 GB RAM, 20 GB disk.
 Portlar: `3000` (ilova, proksi orqasida), `5433` faqat `127.0.0.1` ga
 (Postgres). Doimiy hajm: `qara-pgdata`.
+
+### HTTPS va reverse proxy
+
+Produksiyada ilova porti internetga BEVOSITA ochilmaydi:
+
+```bash
+# .env ga qo'shing
+SITE_DOMAIN=qara.uz
+ACME_EMAIL=admin@qara.uz
+TRUSTED_PROXY_HOPS=1        # Caddy bitta proksi
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+Caddy Let's Encrypt sertifikatini o'zi oladi va yangilaydi; HTTP → HTTPS
+yo'naltirish ham avtomatik. Sertifikatlar `qara-caddy-data` hajmida
+saqlanadi — uni o'chirmang, aks holda Let's Encrypt limitiga urilasiz.
+
+Tekshirildi (`docker compose config`): prod overlay bilan tashqariga faqat
+Caddy chiqadi (80/443), `app` va `db` da host porti qolmaydi.
+
+Xavfsizlik sarlavhalari Caddy'da EMAS, ilovaning `proxy.ts` faylida —
+ular yo'lga qarab farq qiladi (`/mini-app/*` Telegram iframe'ida ochilishi
+kerak). Proksi ularni ustidan yozmasligi shart.
+
+### Zaxira jadval bo'yicha
+
+```cron
+# Har kuni 03:00 da
+0 3 * * * cd /srv/qara && ./scripts/backup-db.sh /srv/backups >> /var/log/qara-backup.log 2>&1
+```
+
+`BACKUP_RETENTION_DAYS` (standart 14) dan eski fayllar o'chiriladi. Skript
+avval dump yaroqliligini tekshiradi (`pg_restore --list`), keyingina eskisini
+o'chiradi — buzuq zaxira yaxshi zaxirani almashtirib qo'ymaydi.
+
+Uzoqroq saqlash kerak bo'lsa, haftalik va oylik nusxalarni alohida papkaga
+ko'chiring:
+
+```cron
+0 4 * * 0 cp "$(ls -t /srv/backups/*.dump | head -1)" /srv/backups/weekly/
+0 5 1 * * cp "$(ls -t /srv/backups/*.dump | head -1)" /srv/backups/monthly/
+```
+
+Zaxiralar `.gitignore` da — repozitoriyga tushmaydi.
+
+### Health endpointlari
+
+| Manzil | Nima tekshiradi | Kim ishlatadi |
+|---|---|---|
+| `/api/health` | Faqat jarayon tirikmi. Bazaga TEGMAYDI | Docker `HEALTHCHECK`, liveness |
+| `/api/health/ready` | Baza + migratsiya holati | Reverse proxy, readiness |
+
+Ikkalasi ham sir qaytarmaydi — tekshirildi.
+
+`/api/health/ready` tugallanmagan migratsiya bo'lsa **503** qaytaradi, ya'ni
+yarim migratsiya qilingan konteyner trafik olmaydi.
