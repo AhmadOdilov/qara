@@ -4,6 +4,14 @@
 
 generator client {
   provider = "prisma-client-js"
+  // `native` — mahalliy ishlab chiqish uchun (macOS/Linux glibc).
+  // `linux-musl-openssl-3.0.x` — Docker image alpine ustida quriladi.
+  //
+  // Ochiq e'lon qilinmasa Prisma faqat JORIY platforma uchun dvigatel
+  // yasaydi. Hozir build ham, runtime ham bitta alpine image'ida bo'lgani
+  // uchun bu ishlaydi, lekin buildx bilan boshqa platformadan yig'ilsa
+  // yoki asos image almashsa runtime'da «engine topilmadi» xatosi chiqardi.
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -927,6 +935,9 @@ model TelegramBotAutomationRun {
   @@unique([automationId, dedupeKey])
   @@index([botId, startedAt])
   @@index([automationId, status])
+  /// Tafsilot sahifasi: WHERE automationId = ? ORDER BY startedAt DESC LIMIT 25.
+  /// Mavjud indekslarning birortasi bu tartibni qoplamaydi.
+  @@index([automationId, startedAt])
   @@map("telegram_bot_automation_runs")
 }
 

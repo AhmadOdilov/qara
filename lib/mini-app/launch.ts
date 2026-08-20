@@ -140,11 +140,15 @@ export async function updateLaunch(
   }
 
   /* Inline va keyboard — qoralamadagi tugma yozuvlari */
+  // Tugmalar halqadan TASHQARIDA bir marta o'qiladi — ilgari har bir
+  // takrorlanishda qayta so'ralardi.
+  const allLaunchButtons = await launchButtons(botId);
+
   for (const kind of ["inline", "reply"] as const) {
     const wanted = kind === "inline" ? patch.inline : patch.keyboard;
     if (wanted === undefined) continue;
 
-    const existing = (await launchButtons(botId)).filter(
+    const existing = allLaunchButtons.filter(
       (button) => button.keyboardKind === kind,
     );
 

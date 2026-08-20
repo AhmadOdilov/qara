@@ -27,8 +27,44 @@ export async function GET() {
     );
   }
 
+  /*
+    Migratsiya holati (§P5 PHASE 7, 11).
+
+    Baza javob bersa ham, migratsiya yarim qolgan bo'lsa sxema kod kutgan
+    shaklda bo'lmaydi va ilova ishlayotgandek ko'rinib turib xato beradi.
+    Prisma tugallanmagan migratsiyani `finished_at IS NULL` bilan belgilaydi
+    (`rolled_back_at` esa qaytarilganini).
+
+    Jadval umuman bo'lmasligi mumkin (masalan `db push` bilan qurilgan dev
+    bazasi) — bu holat XATO deb hisoblanmaydi, shunchaki noma'lum.
+  */
+  let migrations: "ok" | "pending" | "unknown" = "unknown";
+  try {
+    const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(*)::bigint AS count
+      FROM "_prisma_migrations"
+      WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL
+    `;
+    migrations = Number(rows[0]?.count ?? 0) === 0 ? "ok" : "pending";
+  } catch {
+    migrations = "unknown";
+  }
+
+  if (migrations === "pending") {
+    console.error("[health/ready] tugallanmagan migratsiya bor");
+    return NextResponse.json(
+      { status: "unavailable", database: "up", migrations },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
   return NextResponse.json(
-    { status: "ok", database: "up", latencyMs: Date.now() - startedAt },
+    {
+      status: "ok",
+      database: "up",
+      migrations,
+      latencyMs: Date.now() - startedAt,
+    },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

@@ -864,3 +864,83 @@ DigitalOcean Managed DB).
   konstruktorda ko'rinadi).
 - Rasm, hujjat va ovozli xabarlar matn tavsifi sifatida saqlanadi; media
   fayllarni yuklab olish qo'shilmagan.
+
+---
+
+## Produksiyaga chiqarish
+
+### Buyruqlar
+
+```bash
+cp .env.example .env          # sirlarni to'ldiring (pastdagi ro'yxatga qarang)
+docker compose up -d          # db (healthy) → migrate → app
+docker compose logs -f app
+curl -s localhost:3000/api/health/ready
+```
+
+Tartib qat'iy: `migrate` konteyneri `prisma migrate deploy` ni bir marta
+bajaradi va MUVAFFAQIYATLI tugamasa `app` umuman ko'tarilmaydi. Migratsiya
+ilova ichida ishlamaydi — bir nechta nusxa bir vaqtda migratsiya qilib
+bazani buzmasligi uchun.
+
+`prisma db push` produksiyada ISHLATILMAYDI. Seed ham avtomatik ishlamaydi
+(`--skip-seed`), tasodifan demo ma'lumot tushib qolmasin.
+
+### Majburiy sirlar
+
+| O'zgaruvchi | Nima uchun |
+|---|---|
+| `AUTH_SECRET` | Sessiya cookie'lari imzosi. `openssl rand -base64 32` |
+| `SECRETS_KEY` | Bot tokenlarini AES-256-GCM bilan shifrlash. **Alohida belgilang** — `AUTH_SECRET` almashsa saqlangan tokenlar ochilmay qoladi |
+| `DATABASE_URL` | Docker'da `DATABASE_URL_DOCKER` ustidan yoziladi |
+| `APP_URL` | Webhook va OAuth callback manzillari uchun HTTPS |
+
+### Teskari proksi orqasida
+
+`TRUSTED_PROXY_HOPS` ni oldingizdagi proksilar soniga qarab belgilang
+(bitta nginx/Caddy uchun `1`). Sozlanmasa `X-Forwarded-For` ga umuman
+ishonilmaydi va rate limit HAMMA so'rov uchun umumiy bo'ladi — bu xavfsiz,
+lekin foydalanuvchilaringizni bir-biriga bog'lab qo'yadi. Prodda bir marta
+ogohlantirish logga chiqadi.
+
+### Rate limit va bir nechta nusxa
+
+Rate limiter JARAYON XOTIRASIDA ishlaydi (`lib/api.ts`). Ya'ni:
+
+- bitta konteynerda — to'g'ri ishlaydi;
+- N ta konteynerda — amaldagi chegara N barobar yumshoq bo'ladi, chunki har
+  bir nusxa o'z hisobini yuritadi.
+
+Bir nechta nusxa bilan ishlatishdan oldin uni umumiy do'konga (Redis va sh.k.)
+ko'chirish kerak. Hozircha bu **ongli cheklov**, kamchilik emas.
+
+Login uchun qo'shimcha himoya bor: manbadan tashqari EMAIL bo'yicha ham
+cheklanadi (10 muvaffaqiyatsiz urinish / 5 daqiqa) va u nusxalar orasida
+bo'linmasa ham hujum ostidagi hisobni himoya qiladi.
+
+### Zaxira nusxa
+
+```bash
+./scripts/backup-db.sh ./backups          # kunlik cron uchun
+./scripts/restore-db.sh ./backups/qara-YYYYMMDD-HHMMSS.dump
+```
+
+Zaxira `custom` formatda (siqilgan, tanlab tiklanadi), yaroqliligi
+`pg_restore --list` bilan tekshiriladi va `BACKUP_RETENTION_DAYS` dan
+eskilari o'chiriladi.
+
+**Muhim:** dump ichidagi bot tokenlari va API kalitlari SHIFRLANGAN. Ularni
+ochish uchun `SECRETS_KEY` kerak — uni zaxiradan ALOHIDA joyda saqlang.
+Kalitsiz dump o'z-o'zicha foydasiz.
+
+Cron misoli:
+
+```cron
+0 3 * * * cd /srv/qara && ./scripts/backup-db.sh /srv/backups >> /var/log/qara-backup.log 2>&1
+```
+
+### Resurslar
+
+Boshlang'ich uchun yetarli: 2 vCPU, 2 GB RAM, 20 GB disk.
+Portlar: `3000` (ilova, proksi orqasida), `5433` faqat `127.0.0.1` ga
+(Postgres). Doimiy hajm: `qara-pgdata`.

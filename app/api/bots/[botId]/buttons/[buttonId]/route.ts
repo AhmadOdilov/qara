@@ -143,15 +143,21 @@ async function isDescendant(
   candidate: string,
   ancestorId: string,
 ): Promise<boolean> {
+  // Ilgari bu yerda halqa ichida so'rov bor edi — chuqurlikka qarab 20 tagacha
+  // ketma-ket murojaat. Botning butun daraxti bitta so'rovda o'qiladi va
+  // yurish xotirada bajariladi: menyu daraxti kichik (yuzlab tugma), lekin
+  // so'rovlar soni endi chuqurlikka bog'liq emas.
+  const rows = await prisma.telegramBotButton.findMany({
+    where: { botId },
+    select: { id: true, parentId: true },
+  });
+  const parentOf = new Map(rows.map((row) => [row.id, row.parentId]));
+
   let current: string | null = candidate;
-  for (let depth = 0; current && depth < 20; depth++) {
+  // Chegara saqlanadi: ma'lumot buzilib halqa hosil bo'lsa cheksiz aylanmasin.
+  for (let depth = 0; current && depth < 20; depth += 1) {
     if (current === ancestorId) return true;
-    const row: { parentId: string | null } | null =
-      await prisma.telegramBotButton.findFirst({
-        where: { id: current, botId },
-        select: { parentId: true },
-      });
-    current = row?.parentId ?? null;
+    current = parentOf.get(current) ?? null;
   }
   return false;
 }
