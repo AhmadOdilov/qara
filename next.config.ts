@@ -15,6 +15,13 @@ const nextConfig: NextConfig = {
    * Next monorepo deb o'ylab `standalone` ni noto'g'ri joyga yig'ishi mumkin.
    */
   outputFileTracingRoot: import.meta.dirname,
+
+  /**
+   * `X-Powered-By: Next.js` sarlavhasini o'chiradi. U hech qanday foyda
+   * bermaydi, lekin hujumchiga qaysi freymvork ishlatilayotganini aytadi —
+   * ya'ni qaysi CVE ro'yxatidan boshlashni.
+   */
+  poweredByHeader: false,
 };
 
 export default nextConfig;
