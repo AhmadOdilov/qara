@@ -15,7 +15,7 @@ const schema = z.object({
 });
 
 export async function POST(request: Request) {
-  const limit = rateLimit(`register:${clientIp(request)}`, 5, 60_000);
+  const limit = rateLimit(`register:ip:${clientIp(request)}`, 5, 60_000);
   if (!limit.allowed) {
     return fail(`Juda ko'p urinish. ${limit.retryAfter}s dan keyin urining.`, 429);
   }

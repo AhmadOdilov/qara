@@ -2,6 +2,12 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
 import { getCurrentUser, verifyCsrf, type SessionUser } from "@/lib/auth";
+import {
+  resolveClientIp,
+  trustConfigFromEnv,
+  UNTRUSTED_KEY,
+  type ResolvedIp,
+} from "@/lib/client-ip";
 
 export function ok<T>(data: T, init?: ResponseInit) {
   return NextResponse.json(data, init);
@@ -41,12 +47,74 @@ export function rateLimit(
   return { allowed: true, retryAfter: 0 };
 }
 
-export function clientIp(request: Request): string {
-  return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("x-real-ip") ||
-    "local"
+/*
+  Ishonchli proksi konfiguratsiyasi bir marta o'qiladi. Sozlanmagan bo'lsa
+  prodda ogohlantirish chiqadi: jimgina «hamma bitta chelakda» holatiga
+  tushib qolish eng yomon variant, chunki uni hech kim sezmaydi.
+*/
+const trustConfig = trustConfigFromEnv(process.env);
+let warned = false;
+
+function warnOnce(): void {
+  if (warned || process.env.NODE_ENV !== "production") return;
+  warned = true;
+  console.warn(
+    "[security] TRUSTED_PROXY_HOPS ham, TRUSTED_PROXY_HEADER ham " +
+      "sozlanmagan. X-Forwarded-For ga ishonilmaydi va rate limit hamma " +
+      "so'rov uchun UMUMIY bo'ladi. .env.example ga qarang.",
   );
+}
+
+/**
+ * So'rovning klient manzili haqidagi to'liq ma'lumot.
+ * Audit yozuvi manbani ham ko'rsatishi uchun ochiq eksport qilinadi.
+ */
+export function resolveIp(request: Request): ResolvedIp {
+  const resolved = resolveClientIp(request.headers, trustConfig);
+  if (resolved.source === "untrusted") warnOnce();
+  return resolved;
+}
+
+/**
+ * Rate limit kaliti va audit yozuvi uchun barqaror qiymat.
+ *
+ * DIQQAT: bu klient yuborgan sarlavhaning o'zi EMAS. Ishonchli manba
+ * topilmasa `"untrusted"` qaytadi va hamma so'rov bitta chelakka tushadi —
+ * ya'ni sarlavha almashtirib cheklovni chetlab o'tib bo'lmaydi.
+ */
+/**
+ * Chelakni O'STIRMASDAN tekshiradi.
+ *
+ * `rateLimit()` har chaqiruvda urinishni yozadi. Muvaffaqiyatsiz kirishni
+ * sanashda esa avval tekshirib, keyin faqat XATO bo'lganda yozish kerak —
+ * aks holda to'g'ri parol kiritgan odam ham hisobini qulflab qo'yardi.
+ */
+export function rateLimitExceeded(
+  key: string,
+  limit: number,
+  windowMs: number,
+): boolean {
+  const now = Date.now();
+  const hits = (buckets.get(key) ?? []).filter((t) => now - t < windowMs);
+  buckets.set(key, hits);
+  return hits.length >= limit;
+}
+
+/** Muvaffaqiyatsiz urinishni yozadi. */
+export function recordFailure(key: string, windowMs: number): void {
+  const now = Date.now();
+  const hits = (buckets.get(key) ?? []).filter((t) => now - t < windowMs);
+  hits.push(now);
+  buckets.set(key, hits);
+}
+
+export function clientIp(request: Request): string {
+  return resolveIp(request).key;
+}
+
+/** Ishonchli manba yo'qligini bilish kerak bo'lgan joylar uchun. */
+export function isTrustedIp(request: Request): boolean {
+  return resolveIp(request).key !== UNTRUSTED_KEY;
 }
 
 /** So'rov tanasini zod sxemasi bilan tekshiradi. */
