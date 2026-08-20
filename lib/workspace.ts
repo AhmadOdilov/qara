@@ -1,5 +1,6 @@
 import "server-only";
 import type { WorkspaceRole } from "@prisma/client";
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { fail, guard } from "@/lib/api";
@@ -64,16 +65,51 @@ export type WorkspaceContext = {
   role: WorkspaceRole;
 };
 
+/** Faol ish maydonini eslab qoladigan cookie. `qara_lang` bilan bir xil uslub. */
+export const WORKSPACE_COOKIE = "qara_ws";
+
+export type WorkspaceOption = {
+  id: string;
+  name: string;
+  role: WorkspaceRole;
+};
+
+/** Foydalanuvchi a'zo bo'lgan barcha ish maydonlari. */
+export async function listWorkspaces(userId: string): Promise<WorkspaceOption[]> {
+  const rows = await prisma.workspaceMember.findMany({
+    where: { userId },
+    orderBy: { createdAt: "asc" },
+    select: { role: true, workspace: { select: { id: true, name: true } } },
+  });
+  return rows.map((row) => ({
+    id: row.workspace.id,
+    name: row.workspace.name,
+    role: row.role,
+  }));
+}
+
 /**
  * Foydalanuvchining faol ish maydoni.
  *
- * A'zolik topilmasa shaxsiy workspace yaratiladi. Id deterministik
- * (`ws_<userId>`) — migratsiyadagi backfill bilan bir xil, shuning uchun
- * bir vaqtda kelgan ikki so'rov ikkita workspace yaratib yubormaydi.
+ * Tanlash tartibi:
+ *   1) `qara_ws` cookie — foydalanuvchi o'zi tanlagani (a'zoligi tekshiriladi),
+ *   2) eng eski a'zolik — shaxsiy ish maydoni,
+ *   3) a'zolik umuman yo'q bo'lsa shaxsiy workspace yaratiladi.
+ *
+ * Cookie'siz ikkinchi qadam yagona yo'l bo'lib qolardi: boshqa ish maydoniga
+ * qo'shilgan odam u yerga hech qachon o'tolmasdi va «a'zo qo'shish» amalda
+ * ishlamasdi.
+ *
+ * Id deterministik (`ws_<userId>`) — migratsiyadagi backfill bilan bir xil,
+ * shuning uchun bir vaqtda kelgan ikki so'rov ikkita workspace yaratmaydi.
  */
 export async function activeWorkspace(user: SessionUser): Promise<WorkspaceContext> {
+  const chosen = await readWorkspaceCookie();
+
+  // Cookie'dagi id faqat A'ZOLIK tasdiqlansa ishlatiladi — boshqa odamning
+  // ish maydoni id'sini cookie'ga yozib qo'yish bilan kirib bo'lmaydi.
   const membership = await prisma.workspaceMember.findFirst({
-    where: { userId: user.id },
+    where: chosen ? { userId: user.id, workspaceId: chosen } : { userId: user.id },
     orderBy: { createdAt: "asc" },
     select: { role: true, workspace: { select: { id: true, name: true } } },
   });
@@ -85,6 +121,24 @@ export async function activeWorkspace(user: SessionUser): Promise<WorkspaceConte
       workspaceName: membership.workspace.name,
       role: membership.role,
     };
+  }
+
+  // Cookie eskirgan bo'lishi mumkin (a'zolikdan chiqarilgan) — u holda
+  // odatdagi tartibga qaytamiz.
+  if (chosen) {
+    const fallback = await prisma.workspaceMember.findFirst({
+      where: { userId: user.id },
+      orderBy: { createdAt: "asc" },
+      select: { role: true, workspace: { select: { id: true, name: true } } },
+    });
+    if (fallback) {
+      return {
+        user,
+        workspaceId: fallback.workspace.id,
+        workspaceName: fallback.workspace.name,
+        role: fallback.role,
+      };
+    }
   }
 
   const id = `ws_${user.id}`;
@@ -109,6 +163,18 @@ export async function activeWorkspace(user: SessionUser): Promise<WorkspaceConte
     workspaceName: workspace.name,
     role: "owner",
   };
+}
+
+/** Cookie o'qish — API route'ida ham, sahifada ham ishlaydi. */
+async function readWorkspaceCookie(): Promise<string | null> {
+  try {
+    const jar = await cookies();
+    const value = jar.get(WORKSPACE_COOKIE)?.value?.trim();
+    return value ? value : null;
+  } catch {
+    // Cookie kontekstidan tashqarida chaqirilsa (masalan skript) — e'tiborsiz.
+    return null;
+  }
 }
 
 /** Sahifalar uchun: sessiya + faol workspace. */

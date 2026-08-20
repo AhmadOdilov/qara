@@ -83,6 +83,11 @@ export function AppShell({
       label: t.nav.apiKeys,
       icon: <IconKey width={18} height={18} />,
     },
+    {
+      href: "/workspace",
+      label: t.nav.workspace,
+      icon: <IconUsers width={18} height={18} />,
+    },
     { href: "/profile", label: t.nav.profile, icon: <IconUser width={18} height={18} /> },
     { href: "/help", label: t.nav.help, icon: <IconHelp width={18} height={18} /> },
     ...(user.role === "admin"

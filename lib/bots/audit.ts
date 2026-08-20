@@ -23,7 +23,9 @@ export type AuditAction =
   | "BUTTONS_UPDATED"
   | "WORKFLOW_UPDATED"
   | "AUTOMATION_UPDATED"
-  | "PLAN_APPLIED";
+  | "PLAN_APPLIED"
+  /// Ish maydoni a'zosi qo'shildi, roli o'zgardi yoki chiqarildi (§21)
+  | "WORKSPACE_MEMBER_UPDATED";
 
 /**
  * Muhim amallarni yozib boradi. Audit yozuvi asosiy oqimni to'xtatmaydi —
