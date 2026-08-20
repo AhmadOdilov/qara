@@ -25,7 +25,9 @@ export type AuditAction =
   | "AUTOMATION_UPDATED"
   | "PLAN_APPLIED"
   /// Ish maydoni a'zosi qo'shildi, roli o'zgardi yoki chiqarildi (§21)
-  | "WORKSPACE_MEMBER_UPDATED";
+  | "WORKSPACE_MEMBER_UPDATED"
+  /// To'lov urinishi boshlandi, holati o'zgardi yoki rad etildi (§P3)
+  | "PAYMENT_UPDATED";
 
 /**
  * Muhim amallarni yozib boradi. Audit yozuvi asosiy oqimni to'xtatmaydi —

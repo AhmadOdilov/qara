@@ -346,7 +346,6 @@ model MiniApp {
 
   /**
    * API chaqiruvlari uchun ruxsat etilgan domenlar.
-   *
    * Bo'sh bo'lsa — SSRF himoyasining umumiy qoidalari ishlaydi (ichki tarmoq
    * yopiq). To'ldirilsa — faqat shu domenlarga chiqiladi, ya'ni eng qattiq
    * rejim. Tavsiya: doim to'ldirish.
@@ -365,24 +364,22 @@ model MiniApp {
 
 /**
  * Mini App chaqira oladigan tashqi API nuqtasi.
- *
  * MUHIM QAROR: manzilni KLIENT BERMAYDI. Klient faqat shu yozuvning id'sini
  * yuboradi, manzil, metod va sarlavhalar esa serverdan olinadi. Shu sababli
  * foydalanuvchi ixtiyoriy manzilga so'rov yubora olmaydi — SSRF hujumining
  * eng keng yo'li shu bilan yopiladi.
- *
  * `headers` ichida API kalitlari bo'lishi mumkin, shuning uchun ular
  * konstruktorga MASKALANIB qaytariladi va hech qachon Mini App'ga tushmaydi.
  */
 model MiniAppEndpoint {
-  id        String @id @default(cuid())
-  miniAppId String
-  name      String
+  id           String @id @default(cuid())
+  miniAppId    String
+  name         String
   /// GET | POST | PUT | PATCH | DELETE
-  method    String @default("GET")
-  url       String
+  method       String @default("GET")
+  url          String
   /// Server qo'shadigan sarlavhalar: { "Authorization": "Bearer …" }
-  headers   Json   @default("{}")
+  headers      Json   @default("{}")
   /// Tana shabloni: { "email": "{{email}}" } — forma qiymatlari joylashadi
   bodyTemplate Json?
   /// Javobdan nima olinadi: { "message": "data.message" }
@@ -402,17 +399,17 @@ model MiniAppEndpoint {
 /// alohida jadval qilinmadi: daraxt doim butunligicha o'qiladi va yoziladi,
 /// nashr esa uni surat sifatida muzlatadi.
 model MiniAppPage {
-  id        String  @id @default(cuid())
-  miniAppId String
-  name      String
+  id         String  @id @default(cuid())
+  miniAppId  String
+  name       String
   /// Navigatsiya manzili: `home`, `products`, `cart`
-  slug      String
-  title     String?
+  slug       String
+  title      String?
   /// Mini App ochilganda birinchi ko'rinadigan sahifa
-  isHome    Boolean @default(false)
-  sortOrder Int     @default(0)
+  isHome     Boolean @default(false)
+  sortOrder  Int     @default(0)
   /// Komponentlar daraxti — `[{ id, type, props, children }]`
-  components Json   @default("[]")
+  components Json    @default("[]")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -902,10 +899,61 @@ model TelegramBotPayment {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  bot          TelegramBot                     @relation(fields: [botId], references: [id], onDelete: Cascade)
+  transactions TelegramBotPaymentTransaction[]
 
   @@index([botId, createdAt])
+  @@index([botId, status])
   @@map("telegram_bot_payments")
+}
+
+/// To'lov urinishi — BUYURTMA emas.
+///
+/// `telegram_bot_payments` amalda BUYURTMA yozuvi (savat mahsulotlari, summa,
+/// buyurtma holati). Bitta buyurtma bo'yicha bir nechta to'lov urinishi
+/// bo'lishi mumkin: birinchisi bekor qilinadi, ikkinchisi o'tadi. Shuning
+/// uchun provayder tafsilotlari alohida jadvalda.
+///
+/// `(provider, providerTransactionId)` unikal — takroriy callback shu
+/// cheklovda to'xtaydi. Bu `telegram_update_receipts` dagi bilan bir xil
+/// naqsh: «avval o'qib, keyin yozish» emas, to'g'ridan-to'g'ri INSERT,
+/// shuning uchun bir vaqtda kelgan ikki callback poyga hosil qilmaydi.
+model TelegramBotPaymentTransaction {
+  id      String @id @default(cuid())
+  orderId String
+  botId   String
+
+  /// payme | click
+  provider              String
+  /// Provayderdagi tranzaksiya identifikatori. Callback kelgunicha bo'sh.
+  providerTransactionId String?
+
+  /// created | pending | processing | paid | failed | expired | cancelled | refunded
+  status String @default("created")
+
+  /// Buyurtma valyutasidagi summa. Provayderning o'z birligiga (masalan
+  /// Payme tiyiniga) o'tkazish adapter ichida bo'ladi.
+  amount   Int
+  currency String @default("UZS")
+
+  paidAt        DateTime?
+  cancelledAt   DateTime?
+  /// Nima uchun o'tmadi — foydalanuvchiga ko'rsatiladigan qisqa sabab.
+  failureReason String?
+
+  /// Provayderga xos qo'shimcha maydonlar. Query qilinadigan hech narsa
+  /// bu yerga yashirilmaydi.
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order TelegramBotPayment @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerTransactionId])
+  @@index([orderId, createdAt])
+  @@index([botId, status])
+  @@map("telegram_bot_payment_transactions")
 }
 
 /// Developer mode va analitika uchun texnik hodisalar
@@ -1046,7 +1094,6 @@ model TelegramBotDraft {
   @@index([ownerId, updatedAt])
   @@map("telegram_bot_drafts")
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  API KALITLARI (§8) — tashqi tizimlar Qara API'siga shu kalit bilan kiradi.

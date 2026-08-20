@@ -3,6 +3,7 @@ import Link from "next/link";
 import { requireWorkspace } from "@/lib/workspace";
 import { getDictionary } from "@/lib/i18n/server";
 import { listStores, isStore, type StoreSummary } from "@/lib/bots/commerce";
+import { anyProviderConfigured } from "@/lib/payments/registry";
 import { formatMoney } from "@/lib/bots/buttons/cart";
 import { formatOrderDate } from "@/lib/bots/buttons/orders";
 import { statusTone } from "@/components/bots/status";
@@ -29,6 +30,10 @@ export default async function StoresPage() {
 
   const all = await listStores(ctx.workspaceId);
   const stores = all.filter(isStore);
+
+  // To'lov holati registrdan keladi, qo'lda yozilmaydi: provayder sozlangan
+  // va protokoli tasdiqlangan zahoti bu yer o'zi «Ishlaydi» ga o'tadi.
+  const paymentsReady = anyProviderConfigured();
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -61,14 +66,16 @@ export default async function StoresPage() {
               {/* Yagona qurilmagan qism — ochiq ajratilgan. */}
               <Capability
                 label={t.stores.capPayments}
-                tag={t.stores.statusSoon}
-                soon
+                tag={paymentsReady ? t.stores.statusAvailable : t.stores.statusSoon}
+                soon={!paymentsReady}
               />
             </ul>
 
-            <p className="mt-4 rounded-lg border border-line bg-surface-sunken px-4 py-3 text-xs leading-relaxed text-ink-muted">
-              {t.stores.paymentNote}
-            </p>
+            {paymentsReady ? null : (
+              <p className="mt-4 rounded-lg border border-line bg-surface-sunken px-4 py-3 text-xs leading-relaxed text-ink-muted">
+                {t.stores.paymentNote}
+              </p>
+            )}
           </div>
         </Card>
 
