@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { log } from "@/lib/log";
 
 /**
  * Telegram update'lari uchun takroriy yetkazishdan himoya.
@@ -35,7 +36,11 @@ export async function claimUpdate(
     return true;
   } catch (error) {
     if (isUniqueViolation(error)) return false;
-    console.error("[idempotency] yozib bo'lmadi:", botId, updateId, error);
+    log.error("idempotency: yozib bo'lmadi", {
+      botId,
+      updateId,
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
     return true;
   }
 }

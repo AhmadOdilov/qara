@@ -905,18 +905,46 @@ ogohlantirish logga chiqadi.
 
 ### Rate limit va bir nechta nusxa
 
-Rate limiter JARAYON XOTIRASIDA ishlaydi (`lib/api.ts`). Ya'ni:
+**Hozirgi tavsiya: BITTA `app` nusxasi bilan ishlating.**
 
-- bitta konteynerda — to'g'ri ishlaydi;
-- N ta konteynerda — amaldagi chegara N barobar yumshoq bo'ladi, chunki har
-  bir nusxa o'z hisobini yuritadi.
+Rate limiter jarayon xotirasida (`lib/api.ts`). Bitta nusxada u to'g'ri
+ishlaydi; N nusxada esa har biri o'z hisobini yuritadi va amaldagi chegara
+N barobar yumshaydi.
 
-Bir nechta nusxa bilan ishlatishdan oldin uni umumiy do'konga (Redis va sh.k.)
-ko'chirish kerak. Hozircha bu **ongli cheklov**, kamchilik emas.
+Qara'ning yuki uchun bitta nusxa yetarli: konteyner bo'sh turganda 68 MB
+RAM va 0% CPU ishlatadi, javob vaqti 20–60 ms.
 
-Login uchun qo'shimcha himoya bor: manbadan tashqari EMAIL bo'yicha ham
-cheklanadi (10 muvaffaqiyatsiz urinish / 5 daqiqa) va u nusxalar orasida
-bo'linmasa ham hujum ostidagi hisobni himoya qiladi.
+#### Agar ko'paytirish kerak bo'lsa
+
+Uchta yo'l bor, murakkabligi bo'yicha:
+
+1. **Vertikal o'sish** — serverga ko'proq CPU/RAM bering, nusxa bitta
+   qolsin. Eng arzon va hech narsa o'zgartirmaydi.
+
+2. **Caddy darajasida cheklash** — proksi o'zi cheklaydi, ilova esa
+   ikkinchi qatlam bo'lib qoladi. `caddy-ratelimit` moduli kerak
+   (standart image'da YO'Q, `xcaddy` bilan yig'iladi):
+
+   ```
+   rate_limit {
+     zone login { key {remote_host}; events 10; window 1m }
+   }
+   ```
+
+   Bu ilova kodiga tegmaydi.
+
+3. **Umumiy do'kon** — `lib/api.ts` dagi `buckets` Map'ini Redis'ga
+   ko'chirish. Eng to'g'ri, lekin yangi bog'liqlik va yangi nosozlik
+   nuqtasi qo'shadi. **Faqat 1 va 2 yetmaganda.**
+
+#### Nusxadan qat'i nazar ishlaydigan himoya
+
+Login qo'shimcha ravishda **email bo'yicha** cheklangan (10 muvaffaqiyatsiz
+urinish / 5 daqiqa). Bu kalit soxtalashtirilmaydi va aynan hujum ostidagi
+hisobni himoya qiladi — nusxalar orasida bo'linmasa ham foydali.
+
+Tekshirilgan (konteynerda): 13 ta har xil manbadan bitta hisobga hujum
+qilinganda hisob cheklovi ishladi.
 
 ### Zaxira nusxa
 

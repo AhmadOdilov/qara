@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { redactSecrets } from "@/lib/crypto";
 import { assertPublicHost, assertSafeUrl, SsrfError } from "@/lib/mini-app/ssrf";
+import { log } from "@/lib/log";
 
 /**
  * Mini App'dan tashqi API'ga so'rov.
@@ -135,7 +136,9 @@ export async function runEndpoint(input: {
       return { ok: false, status: 504, error: "Tashqi xizmat javob bermadi" };
     }
     // Tarmoq xatosi matnida ichki manzil bo'lishi mumkin — tozalaymiz.
-    console.error("[mini-app-api]", redactSecrets(String(error)));
+    log.error("mini-app-api: so'rov bajarilmadi", {
+      reason: redactSecrets(String(error)),
+    });
     return { ok: false, status: 502, error: "Tashqi xizmatga ulanib bo'lmadi" };
   } finally {
     clearTimeout(timer);

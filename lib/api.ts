@@ -2,6 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
 import { getCurrentUser, verifyCsrf, type SessionUser } from "@/lib/auth";
+import { log } from "@/lib/log";
 import {
   resolveClientIp,
   trustConfigFromEnv,
@@ -58,10 +59,10 @@ let warned = false;
 function warnOnce(): void {
   if (warned || process.env.NODE_ENV !== "production") return;
   warned = true;
-  console.warn(
-    "[security] TRUSTED_PROXY_HOPS ham, TRUSTED_PROXY_HEADER ham " +
-      "sozlanmagan. X-Forwarded-For ga ishonilmaydi va rate limit hamma " +
-      "so'rov uchun UMUMIY bo'ladi. .env.example ga qarang.",
+  log.warn(
+    "security: ishonchli proksi sozlanmagan — X-Forwarded-For ga " +
+      "ishonilmaydi va rate limit hamma so'rov uchun UMUMIY bo'ladi",
+    { hint: ".env.example → TRUSTED_PROXY_HOPS" },
   );
 }
 

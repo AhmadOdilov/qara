@@ -1,6 +1,7 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { log } from "@/lib/log";
 
 export type AnalyticsEventName =
   | "signup"
@@ -36,6 +37,9 @@ export async function track(
       data: { event, userId: userId ?? null, value, meta },
     });
   } catch (error) {
-    console.error("[analytics] yozib bo'lmadi:", event, error);
+    log.error("analytics: yozib bo'lmadi", {
+      event,
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
   }
 }

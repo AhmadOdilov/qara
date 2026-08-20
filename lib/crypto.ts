@@ -77,6 +77,10 @@ export function tryDecryptSecret(stored: string | null | undefined): string | nu
   try {
     return decryptSecret(stored);
   } catch (error) {
+    // ATAYLAB `console.error`: `lib/log.ts` aynan shu fayldan
+    // `redactSecrets()` ni import qiladi, shuning uchun bu yerda uni
+    // ishlatish aylanma import hosil qilardi. Xato obyekti crypto
+    // xatosi — sir kontenti olib kelmaydi.
     console.error("[crypto] sirni ochib bo'lmadi (kalit almashganmi?)", error);
     return null;
   }

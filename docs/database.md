@@ -94,13 +94,48 @@ Tarix foydalanuvchidan **omon qolishi** kerak:
 
 Foydalanuvchi o'chsa audit yozuvi qoladi, faqat kim qilgani noma'lum bo'ladi.
 
-### Ma'lum cheklov
+### Ma'lum cheklov: moliyaviy yozuv CASCADE ostida
 
-`telegram_bot_payments.botId` **CASCADE**. Ya'ni bot o'chirilsa uning
-buyurtmalari va to'lov urinishlari ham o'chadi. Moliyaviy yozuv uchun bu
-munozarali, lekin mavjud xatti-harakat — o'zgartirish bot o'chirishni
-buzardi. Buyurtma tarixini saqlash kerak bo'lsa, bot o'chirishdan oldin
-zaxira oling.
+`telegram_bot_payments.botId` → `telegram_bots` **CASCADE**. Bot o'chirilsa
+uning buyurtmalari va ular bilan bog'liq to'lov urinishlari ham o'chadi.
+
+Kod muallifi bu muammoni qisman tan olgan: `deleteBot()` audit yozuvini
+ATAYLAB `botId` siz yozadi, aks holda «bot o'chirildi» yozuvining o'zi ham
+cascade bilan ketardi (`lib/bots/service.ts`).
+
+#### Uchta variant tahlil qilindi
+
+| Variant | Nima bo'ladi | Baho |
+|---|---|---|
+| **`RESTRICT`** | Buyurtmasi bor botni o'chirib bo'lmaydi | 🔴 Foydalanuvchi tuzoqqa tushadi: sinov uchun yaratgan botini ham o'chirolmaydi. Oldin buyurtmalarni qo'lda tozalash kerak bo'ladi — bu ham xuddi shu ma'lumotni yo'q qiladi, faqat ko'proq qadam bilan |
+| **`SET NULL`** | Buyurtma qoladi, boti noma'lum | 🔴 `botId` hozir `NOT NULL`. Uni nullable qilish MAVJUD ma'lumot ustida sxema o'zgarishi va butun kod bo'ylab `botId` tekshiruvlarini qayta ko'rib chiqishni talab qiladi. Ish maydoni izolyatsiyasi `botId` ga tayanadi — u yo'qolsa buyurtma egasi ham noma'lum bo'ladi |
+| **Yumshoq o'chirish** | Bot `deletedAt` bilan belgilanadi | 🟡 Eng to'g'ri yechim, lekin eng qimmat: har bir so'rovga `deletedAt IS NULL` qo'shish, unikal cheklovlarni qayta ko'rib chiqish (`telegramBotId` `@unique` — o'chirilgan bot tokenni band qilib turadi), UI va analitikani moslash |
+
+#### Qaror: hozircha o'zgartirilmaydi
+
+Sabab:
+
+1. **Bugun xavf ostidagi ma'lumot yo'q** — bazada 0 ta buyurtma, 0 ta to'lov
+   urinishi. To'lov provayderlari hali ulanmagan, ya'ni haqiqiy pul o'tmagan.
+2. Uch variantning ikkitasi **holatni yomonlashtiradi**, uchinchisi esa
+   ishlayotgan featurelarni qayta yozishni talab qiladi.
+3. Destruktiv migratsiyani asossiz qilish taqiqlangan.
+
+#### Qachon qayta ko'rib chiqish kerak
+
+Payme/Click ulangan va **birinchi haqiqiy to'lov o'tgan** zahoti. O'shanda
+yumshoq o'chirish yagona to'g'ri variant bo'ladi.
+
+#### Hozirgi himoya
+
+- Kunlik zaxira (`scripts/backup-db.sh`) — bot tasodifan o'chirilsa
+  buyurtmalar zaxiradan tiklanadi;
+- bot o'chirish `bot:delete` huquqini talab qiladi (faqat `owner`/`admin`);
+- UI'da tasdiqlash oynasi bor.
+
+**Tavsiya:** to'lovlar ishga tushgach, bot o'chirish oynasiga «bu botda N ta
+to'langan buyurtma bor» ogohlantirishini qo'shing — bu sxemaga tegmaydigan
+eng arzon himoya.
 
 ---
 

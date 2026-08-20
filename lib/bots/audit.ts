@@ -2,6 +2,7 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { redactSecrets } from "@/lib/crypto";
+import { log } from "@/lib/log";
 
 export type AuditAction =
   | "BOT_CREATED"
@@ -60,7 +61,10 @@ export async function audit(
       },
     });
   } catch (error) {
-    console.error("[audit] yozib bo'lmadi:", action, error);
+    log.error("audit: yozib bo'lmadi", {
+      action,
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
   }
 }
 
@@ -90,6 +94,10 @@ export async function recordEvent(
       },
     });
   } catch (error) {
-    console.error("[event] yozib bo'lmadi:", kind, name, error);
+    log.error("event: yozib bo'lmadi", {
+      kind,
+      name,
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
   }
 }

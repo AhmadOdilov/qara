@@ -198,3 +198,71 @@ describe("savatcha ekrani", () => {
     assert.ok(!view.text.includes("="), "bir dona uchun «=» qo'shilmaydi");
   });
 });
+
+/*
+  Summani KIM hisoblaydi (§P9).
+
+  Savatda faqat `productId` va `qty` saqlanadi; narx har safar bazadagi
+  tugma yozuvidan olinadi. Ya'ni foydalanuvchi summani o'zgartira olmaydi.
+  Quyidagi testlar shu kafolatni mustahkamlaydi — kelajakda kimdir narxni
+  savatga ko'chirsa, ular yiqiladi.
+*/
+describe("summa server tomonida hisoblanadi", () => {
+  const tree = [
+    btn({ id: "iphone", actionType: "product", actionConfig: { price: 1000, currency: "UZS" } }),
+    btn({ id: "case", actionType: "product", actionConfig: { price: 50, currency: "UZS" } }),
+  ];
+
+  test("narx savatdan emas, DARAXTDAN olinadi", () => {
+    // Savatga soxta narx maydonlari qo'shib ko'ramiz.
+    const tampered = readCart({
+      cart: {
+        lines: [
+          { productId: "iphone", qty: 1, price: 1, amount: 1, total: 1 },
+        ],
+      },
+    });
+
+    const lines = resolveCart(tree, tampered);
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].amount, 1000, "soxta narx e'tiborga olinmadi");
+    assert.equal(cartTotal(lines), 1000);
+  });
+
+  test("miqdor chegaradan oshirilmaydi", () => {
+    const huge = readCart({ cart: { lines: [{ productId: "iphone", qty: 999999 }] } });
+    assert.equal(huge.lines[0].qty, 99, "MAX_QTY bilan cheklandi");
+    assert.equal(cartTotal(resolveCart(tree, huge)), 99_000);
+  });
+
+  test("manfiy va kasr miqdor rad etiladi yoki tuzatiladi", () => {
+    const negative = readCart({ cart: { lines: [{ productId: "iphone", qty: -5 }] } });
+    assert.deepEqual(negative.lines, [], "manfiy qator tashlandi");
+
+    const fractional = readCart({ cart: { lines: [{ productId: "iphone", qty: 2.9 }] } });
+    assert.equal(fractional.lines[0].qty, 2, "butunga tushdi");
+  });
+
+  test("qatorlar soni chegaralangan", () => {
+    const many = Array.from({ length: 100 }, (_, i) => ({ productId: `p${i}`, qty: 1 }));
+    const cart = readCart({ cart: { lines: many } });
+    assert.equal(cart.lines.length, MAX_CART_LINES);
+  });
+
+  test("mavjud bo'lmagan mahsulot summaga qo'shilmaydi", () => {
+    const cart = readCart({
+      cart: { lines: [{ productId: "iphone", qty: 1 }, { productId: "yoq", qty: 50 }] },
+    });
+    const lines = resolveCart(tree, cart);
+    assert.equal(lines.length, 1);
+    assert.equal(cartTotal(lines), 1000, "yo'q mahsulot 0 qo'shdi");
+  });
+
+  test("narxsiz mahsulot 0 beradi, NaN emas", () => {
+    const noPrice = [btn({ id: "free", actionType: "product", actionConfig: {} })];
+    const cart = readCart({ cart: { lines: [{ productId: "free", qty: 3 }] } });
+    const total = cartTotal(resolveCart(noPrice, cart));
+    assert.equal(total, 0);
+    assert.ok(Number.isFinite(total));
+  });
+});

@@ -43,6 +43,7 @@ import {
   type ReplyMarkup,
 } from "@/lib/bots/buttons/types";
 import type { ViewerContext } from "@/lib/bots/buttons/visibility";
+import { log } from "@/lib/log";
 
 export type ActionContext = {
   button: ButtonRecord;
@@ -497,10 +498,11 @@ export async function executeAction(ctx: ActionContext): Promise<ActionResult> {
   } catch (error) {
     // Handler qulasa foydalanuvchi tushunarli javob oladi, sabab esa yo'qolmasin:
     // router bu natijani `action_error` hodisasi sifatida ham yozib qo'yadi.
-    console.error(
-      `[button-action] ${ctx.button.actionType} (${ctx.button.id}) qulaydi:`,
-      error,
-    );
+    log.error("button-action: amal qulaydi", {
+      actionType: ctx.button.actionType,
+      buttonId: ctx.button.id,
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
     const cfg = config(ctx);
     // Foydalanuvchi texnik xatoni ko'rmaydi (§15) — sabab va chiqish yo'li.
     return {

@@ -16,6 +16,10 @@ export default function GlobalError({
 
   useEffect(() => {
     // Produksiyada bu yerdan Sentry kabi xizmatga yuborish mumkin.
+    // ATAYLAB `console.error`: bu KLIENT komponenti, `lib/log.ts` esa
+    // `server-only`. Next.js bu yerga faqat `digest` beradi, xato matni
+    // produksiyada klientga uzatilmaydi.
+    // Sentry qo'shilsa integratsiya nuqtasi aynan shu yer.
     console.error("[app-error]", error);
   }, [error]);
 

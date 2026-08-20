@@ -7,6 +7,7 @@ import {
 import { AiUnavailable, aiEnabled, generateJson } from "@/lib/ai/claude";
 import { detectKind, detectName, recipeById, RECIPES } from "@/lib/ai/recipes";
 import { isPendingAction } from "@/lib/bots/buttons/types";
+import { log } from "@/lib/log";
 
 /**
  * AI Product Planner (§6–7).
@@ -74,7 +75,7 @@ export async function planBot(input: {
       error instanceof AiUnavailable ? error.reason : "AI javob bermadi";
     // Jim yiqilmaydi: foydalanuvchi baribir ishlaydigan reja oladi va
     // nima uchun AI ishlatilmaganini ko'radi.
-    console.error("[ai/planner] fallback:", reason);
+    log.warn("ai/planner: zaxira generatorga o'tildi", { reason });
     return {
       blueprint: fromRecipe(detectKind(prompt), prompt, input.language),
       source: "rule_based",
