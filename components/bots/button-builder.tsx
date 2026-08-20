@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { api } from "@/lib/client";
 import { fill } from "@/lib/i18n/dictionaries";
 import { useI18n } from "@/lib/i18n/provider";
@@ -34,7 +34,25 @@ import {
   Select,
   Textarea,
   Toggle,
+  type SaveStatus,
 } from "@/components/ui";
+import { Modal } from "@/components/overlays";
+import { BuilderTopBar } from "@/components/bots/builder-topbar";
+import {
+  canRedo as histCanRedo,
+  canUndo as histCanUndo,
+  EMPTY_HISTORY,
+  patchEntry,
+  pushEntry,
+  redoStep,
+  remapParent,
+  toRestoreNodes,
+  undoStep,
+  type BuilderOp,
+  type ButtonPayload,
+  type History,
+  type HistoryEntry,
+} from "@/lib/bots/buttons/history";
 import { IconArrowRight, IconCopy, IconPlus, IconTrash } from "@/components/icons";
 import { MenuTree, type DropPosition } from "@/components/bots/menu-tree";
 import {
@@ -137,6 +155,44 @@ const EMPTY_DRAFT: Draft = {
 /** Tugmalar joyini bitta so'rovda o'zgartirish uchun payload. */
 type MoveItem = { id: string; parentId: string | null; rowIndex: number; sortOrder: number };
 
+/**
+ * Mavjud tugmadan API payload'i.
+ *
+ * Undo teskari amalni bajaradi, ya'ni o'zgarishdan OLDINGI holatni aynan shu
+ * shaklda qaytarish kerak bo'ladi.
+ */
+function recordToPayload(button: ButtonRecord): ButtonPayload {
+  return {
+    text: button.text,
+    emoji: button.emoji,
+    parentId: button.parentId,
+    keyboardKind: button.keyboardKind,
+    buttonType: button.buttonType,
+    actionType: button.actionType,
+    actionConfig: (button.actionConfig ?? {}) as Record<string, unknown>,
+    rowIndex: button.rowIndex,
+    visibility: (button.visibility ?? {}) as Record<string, unknown>,
+    conditions: (button.conditions ?? []) as unknown[],
+    enabled: button.enabled,
+    adminOnly: button.adminOnly,
+  };
+}
+
+/**
+ * Yangi paydo bo'lgan ILDIZ tugmalar.
+ *
+ * Nusxalash butun ostdaraxtni yaratadi; ularning hammasini o'chirish shart
+ * emas — ildizni o'chirish bolalarini ham olib ketadi (cascade).
+ */
+function newRootIds(before: ButtonRecord[], after: ButtonRecord[]): string[] {
+  const had = new Set(before.map((button) => button.id));
+  const fresh = after.filter((button) => !had.has(button.id));
+  const freshIds = new Set(fresh.map((button) => button.id));
+  return fresh
+    .filter((button) => !button.parentId || !freshIds.has(button.parentId))
+    .map((button) => button.id);
+}
+
 export function ButtonBuilder({
   botId,
   botName,
@@ -161,6 +217,13 @@ export function ButtonBuilder({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  /// Saqlash holati — tepa panelda ko'rinadi
+  const [status, setStatus] = useState<SaveStatus>("idle");
+  /// Undo/Redo tarixi. Faqat foydalanuvchi KO'RADIGAN mutatsiyalar tushadi.
+  const [history, setHistory] = useState<History>(EMPTY_HISTORY);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
 
   const { buttons } = state;
 
@@ -202,26 +265,158 @@ export function ButtonBuilder({
     return true;
   }
 
-  /** Har bir mutatsiya uchun bir xil qobiq: xato, band holati, qayta o'qish. */
+  /**
+   * Har bir mutatsiya uchun bir xil qobiq: xato, band holati, qayta o'qish.
+   *
+   * Muvaffaqiyatda YANGI tugmalar ro'yxatini qaytaradi — chaqiruvchi undan
+   * tarix yozuvini tuzadi (masalan yaratilgan tugmaning id'sini topadi).
+   */
   async function run(
     call: () => Promise<{ ok: true } | { ok: false; error: string }>,
     message?: string,
-  ): Promise<boolean> {
+  ): Promise<ButtonRecord[] | null> {
     setBusy(true);
     setError("");
     setNotice("");
+    setStatus("saving");
 
     const result = await call();
     if (!result.ok) {
       setBusy(false);
+      setStatus("error");
       setError(result.error === "network" ? t.errors.network : result.error);
-      return false;
+      return null;
+    }
+
+    const fresh = await api<BuilderState>(`/api/bots/${botId}/buttons`);
+    setBusy(false);
+
+    if (!fresh.ok) {
+      setStatus("error");
+      setError(fresh.error === "network" ? t.errors.network : fresh.error);
+      return null;
+    }
+
+    setState(fresh.data);
+    setStatus("saved");
+    if (message) setNotice(message);
+    return fresh.data.buttons;
+  }
+
+  /* ── Tarix ─────────────────────────────────────────────────────────────── */
+
+  /**
+   * Bitta teskari/qayta amalni bajaradi.
+   *
+   * Yangi id beradigan amallar (`create`, `restore`) uni qaytaradi, chunki
+   * juftlikdagi qarama-qarshi amal shu id'ga moslanishi kerak.
+   */
+  async function applyOp(
+    op: BuilderOp,
+  ): Promise<{ ok: false } | { ok: true; createdIds?: string[] }> {
+    switch (op.kind) {
+      case "create": {
+        const result = await api<{ button: ButtonRecord }>(
+          `/api/bots/${botId}/buttons`,
+          { json: op.payload },
+        );
+        return result.ok
+          ? { ok: true, createdIds: [result.data.button.id] }
+          : { ok: false };
+      }
+      case "update": {
+        const result = await api(`/api/bots/${botId}/buttons/${op.id}`, {
+          method: "PATCH",
+          json: op.payload,
+        });
+        return result.ok ? { ok: true } : { ok: false };
+      }
+      case "delete": {
+        const result = await api(`/api/bots/${botId}/buttons/${op.id}`, {
+          method: "DELETE",
+        });
+        return result.ok ? { ok: true } : { ok: false };
+      }
+      case "move": {
+        const result = await api(`/api/bots/${botId}/buttons/reorder`, {
+          method: "PATCH",
+          json: { items: op.items },
+        });
+        return result.ok ? { ok: true } : { ok: false };
+      }
+      case "restore": {
+        // Ostdaraxt yuqoridan pastga tiklanadi va `parentId` yangi id'ga
+        // qayta bog'lanadi — eski id'lar endi mavjud emas.
+        const idMap = new Map<string, string>();
+        const createdIds: string[] = [];
+        for (const node of op.nodes) {
+          const result = await api<{ button: ButtonRecord }>(
+            `/api/bots/${botId}/buttons`,
+            {
+              json: {
+                ...node.payload,
+                parentId: remapParent(node.oldParentId, idMap),
+              },
+            },
+          );
+          if (!result.ok) return { ok: false };
+          idMap.set(node.oldId, result.data.button.id);
+          createdIds.push(result.data.button.id);
+        }
+        return { ok: true, createdIds };
+      }
+    }
+  }
+
+  /** Tarixga yozuv qo'shadi. Faqat foydalanuvchi ko'radigan mutatsiyalar. */
+  const record = useCallback((entry: HistoryEntry) => {
+    setHistory((current) => pushEntry(current, entry));
+  }, []);
+
+  async function step(direction: "undo" | "redo") {
+    const taken = direction === "undo" ? undoStep(history) : redoStep(history);
+    if (!taken || busy) return;
+
+    const op = direction === "undo" ? taken.entry.undo : taken.entry.redo;
+
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setStatus("saving");
+
+    const applied = await applyOp(op);
+    if (!applied.ok) {
+      setBusy(false);
+      setStatus("error");
+      setError(t.builder.undoFailed);
+      return;
     }
 
     const reloaded = await refresh();
     setBusy(false);
-    if (reloaded && message) setNotice(message);
-    return reloaded;
+    setStatus(reloaded ? "saved" : "error");
+    if (!reloaded) return;
+
+    // Yangi id paydo bo'lgan bo'lsa — juftlikdagi amalni unga moslaymiz,
+    // aks holda keyingi qadam mavjud bo'lmagan tugmaga murojaat qilardi.
+    let next = taken.history;
+    if (applied.createdIds && applied.createdIds.length > 0) {
+      const rootId = applied.createdIds[0];
+      const counterpart: BuilderOp = { kind: "delete", id: rootId };
+      const patched: HistoryEntry =
+        direction === "undo"
+          ? { ...taken.entry, redo: counterpart }
+          : { ...taken.entry, undo: counterpart };
+      next = patchEntry(next, taken.at, patched);
+    }
+    setHistory(next);
+
+    const label = t.builder[taken.entry.label];
+    setNotice(
+      fill(direction === "undo" ? t.builder.undoneToast : t.builder.redoneToast, {
+        label,
+      }),
+    );
   }
 
   /* ── Amallar ───────────────────────────────────────────────────────────── */
@@ -242,34 +437,125 @@ export function ButtonBuilder({
       adminOnly: draft.adminOnly,
     };
 
-    const done = await run(() =>
+    // Tarix uchun o'zgarishdan OLDINGI holat.
+    const before = buttons;
+    const previous = id ? buttons.find((button) => button.id === id) : null;
+
+    const after = await run(() =>
       id
         ? api(`/api/bots/${botId}/buttons/${id}`, { method: "PATCH", json: payload })
         : api(`/api/bots/${botId}/buttons`, { json: payload }),
     );
-    if (done) setAdding(null);
+    if (!after) return;
+
+    if (id && previous) {
+      record({
+        label: "histUpdate",
+        undo: { kind: "update", id, payload: recordToPayload(previous) },
+        redo: { kind: "update", id, payload },
+      });
+    } else {
+      const created = newRootIds(before, after)[0];
+      if (created) {
+        record({
+          label: "histCreate",
+          undo: { kind: "delete", id: created },
+          redo: { kind: "create", payload },
+        });
+      }
+    }
+
+    setAdding(null);
   }
 
   async function remove(id: string) {
     if (!window.confirm(t.builder.removeConfirm)) return;
+
     const gone = new Set(subtreeIds(buttons, id));
+    // Ostdaraxtni O'CHIRISHDAN OLDIN saqlab qolamiz — undo uni qayta
+    // yaratadi. Tugmalar yangi id oladi, shuning uchun ular bilan bog'liq
+    // eski bosish statistikasi tiklanmaydi.
+    const snapshot = buttons
+      .filter((button) => gone.has(button.id))
+      .map((button) => ({
+        id: button.id,
+        parentId: button.parentId,
+        payload: recordToPayload(button),
+      }));
+    const nodes = toRestoreNodes(snapshot, id);
+
     const done = await run(() =>
       api(`/api/bots/${botId}/buttons/${id}`, { method: "DELETE" }),
     );
-    if (done && selectedId && gone.has(selectedId)) setSelectedId(null);
+    if (!done) return;
+
+    if (nodes.length > 0) {
+      record({
+        label: "histDelete",
+        undo: { kind: "restore", nodes },
+        redo: { kind: "delete", id },
+      });
+    }
+    if (selectedId && gone.has(selectedId)) setSelectedId(null);
   }
 
   async function duplicate(id: string) {
-    await run(() =>
+    const before = buttons;
+    const after = await run(() =>
       api(`/api/bots/${botId}/buttons/${id}?action=duplicate`, { method: "POST" }),
     );
+    if (!after) return;
+
+    const copy = newRootIds(before, after)[0];
+    if (!copy) return;
+
+    // Nusxani qayta yaratish uchun uning to'liq ostdaraxti kerak.
+    const copied = new Set(subtreeIds(after, copy));
+    const snapshot = after
+      .filter((button) => copied.has(button.id))
+      .map((button) => ({
+        id: button.id,
+        parentId: button.parentId,
+        payload: recordToPayload(button),
+      }));
+
+    record({
+      label: "histDuplicate",
+      undo: { kind: "delete", id: copy },
+      redo: { kind: "restore", nodes: toRestoreNodes(snapshot, copy) },
+    });
   }
 
   async function applyMove(items: MoveItem[]) {
     if (items.length === 0) return;
-    await run(() =>
+
+    // Sudrab ko'chirish — foydalanuvchi uchun BITTA amal. Oraliq holatlar
+    // tarixga tushmaydi: `planMove` yakuniy joylashuvni bir marta beradi.
+    const byId = new Map(buttons.map((button) => [button.id, button]));
+    const back: MoveItem[] = items.flatMap((item) => {
+      const previous = byId.get(item.id);
+      return previous
+        ? [
+            {
+              id: previous.id,
+              parentId: previous.parentId,
+              rowIndex: previous.rowIndex,
+              sortOrder: previous.sortOrder,
+            },
+          ]
+        : [];
+    });
+
+    const done = await run(() =>
       api(`/api/bots/${botId}/buttons/reorder`, { method: "PATCH", json: { items } }),
     );
+    if (!done || back.length === 0) return;
+
+    record({
+      label: "histMove",
+      undo: { kind: "move", items: back },
+      redo: { kind: "move", items },
+    });
   }
 
   function move(dragId: string, targetId: string | null, position: DropPosition) {
@@ -281,9 +567,105 @@ export function ButtonBuilder({
   const trail = selected ? menuPath(buttons, selected.parentId) : [];
   const errors = state.validation?.errors ?? [];
   const warnings = state.validation?.warnings ?? [];
+  const changes = state.diff.added + state.diff.updated + state.diff.removed;
+
+  /**
+   * Nashr. Xato bo'lsa QORALAMA TEGILMAYDI va nashr etilgan versiya ham
+   * o'zgarmaydi — foydalanuvchiga sabab va qayta urinish ko'rsatiladi.
+   */
+  async function publish() {
+    setPublishing(true);
+    setPublishError("");
+
+    const result = await api<{ published: boolean; version: number }>(
+      `/api/bots/${botId}/buttons/publish`,
+      { method: "POST" },
+    );
+
+    if (!result.ok) {
+      setPublishing(false);
+      setPublishError(
+        result.error === "network" ? t.errors.network : result.error,
+      );
+      return;
+    }
+
+    const reloaded = await refresh();
+    setPublishing(false);
+    if (!reloaded) return;
+
+    setPublishOpen(false);
+    // Nashrdan keyin qoralama va nashr bir xil — tarix endi nashr etilgan
+    // holatga nisbatan ma'nosiz, shuning uchun tozalanadi.
+    setHistory(EMPTY_HISTORY);
+    setNotice(fill(t.builder.publishDone, { version: String(result.data.version) }));
+  }
 
   return (
     <div className="space-y-5">
+      <BuilderTopBar
+        botId={botId}
+        botName={botName ?? t.builder.title}
+        diff={state.diff}
+        publishedVersion={state.publishedVersion}
+        status={status}
+        canUndo={histCanUndo(history)}
+        canRedo={histCanRedo(history)}
+        busy={busy || publishing}
+        blocked={errors.length > 0}
+        onUndo={() => void step("undo")}
+        onRedo={() => void step("redo")}
+        onPublish={() => {
+          setPublishError("");
+          setPublishOpen(true);
+        }}
+      />
+
+      {publishOpen ? (
+        <Modal
+          open
+          onClose={() => setPublishOpen(false)}
+          busy={publishing}
+          size="sm"
+          title={t.builder.publishDialogTitle}
+          description={fill(t.builder.publishDialogBody, {
+            count: String(changes),
+          })}
+          closeLabel={t.common.close}
+          footer={
+            <>
+              <Button
+                variant="ghost"
+                onClick={() => setPublishOpen(false)}
+                disabled={publishing}
+              >
+                {t.common.cancel}
+              </Button>
+              <Button onClick={publish} loading={publishing}>
+                {publishError ? t.builder.retry : t.builder.publish}
+              </Button>
+            </>
+          }
+        >
+          <ul className="space-y-1.5 text-sm text-ink-muted">
+            <li>
+              {state.diff.added} {t.builder.diffAdded}
+            </li>
+            <li>
+              {state.diff.updated} {t.builder.diffUpdated}
+            </li>
+            <li>
+              {state.diff.removed} {t.builder.diffRemoved}
+            </li>
+          </ul>
+          {publishError ? (
+            <div className="mt-3">
+              <Alert>{`${t.builder.publishFailed} ${publishError}`}</Alert>
+            </div>
+          ) : null}
+        </Modal>
+      ) : null}
+
       <Card>
         <CardHeader
           title={t.builder.title}
@@ -1020,24 +1402,6 @@ function PublishCard({
     setVersions(result.data.versions);
   }
 
-  async function publish() {
-    setWorking(true);
-    setError("");
-    const result = await api<{ published: boolean; version: number }>(
-      `/api/bots/${botId}/buttons/publish`,
-      { method: "POST" },
-    );
-    setWorking(false);
-
-    if (!result.ok) {
-      setError(result.error === "network" ? t.errors.network : result.error);
-      return;
-    }
-    // Tarix ochiq bo'lsa u ham yangi versiyani ko'rsatishi kerak.
-    if (versions) setVersions(null);
-    await onDone(fill(t.builder.publishDone, { version: String(result.data.version) }));
-  }
-
   async function restore(versionId: string) {
     setWorking(true);
     setError("");
@@ -1073,23 +1437,14 @@ function PublishCard({
               ? fill(t.builder.versionLabel, { version: String(publishedVersion) })
               : t.builder.notPublished}
           </p>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={toggleHistory}
-              disabled={busy || working}
-            >
-              {t.builder.historyTitle}
-            </Button>
-            <Button
-              size="sm"
-              onClick={publish}
-              disabled={busy || working || changes === 0 || blocked}
-            >
-              {t.builder.publish}
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={toggleHistory}
+            disabled={busy || working}
+          >
+            {t.builder.historyTitle}
+          </Button>
         </div>
 
         {blocked ? <Alert>{t.builder.validationBlocked}</Alert> : null}
