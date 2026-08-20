@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { rateLimit, sanitizeText } from "@/lib/api";
 import { recordEvent } from "@/lib/bots/audit";
 import { readSecret } from "@/lib/bots/secrets";
+import { dispatch } from "@/lib/automation/dispatch";
 import { TelegramApiError } from "@/lib/bots/telegram-api";
 import { telegramTransport, type BotTransport } from "@/lib/bots/transport";
 import { rootView } from "@/lib/bots/buttons/navigation";
@@ -175,11 +176,45 @@ export async function handleBotUpdate(
       : {}),
   };
 
+  // Hodisadan avtomatlarga. Update id — takrorlanmas kalit, shuning uchun
+  // bitta update bitta avtomatni ikki marta ishga tushira olmaydi.
+  const eventKey = String(update.update_id ?? `${chatId}:${started}`);
+  const automationContext = {
+    user: {
+      telegramUserId: ctx.telegramUserId,
+      username: botUser.username,
+      languageCode: botUser.languageCode,
+      phone: botUser.phone,
+      messageCount: botUser.messageCount,
+      tags: botUser.tags,
+    },
+    ...(message?.text ? { message: { text: message.text } } : {}),
+  };
+
+  const fireAutomation = (trigger: Parameters<typeof dispatch>[0]["trigger"]) =>
+    dispatch({
+      botId,
+      trigger,
+      dedupeKey: `${trigger}:${eventKey}`,
+      context: { event: { name: trigger }, ...automationContext },
+      transport,
+      chatId,
+      botUserId: botUser.id,
+    });
+
+  if (botUser.isNew) await fireAutomation("user_joined");
+
   try {
     if (callback) {
       await routeCallback(ctx, callback.id, callback.data ?? "");
     } else if (message) {
       await handleMessage(ctx, message);
+      const text = (message.text ?? "").trim();
+      if (text.startsWith("/start")) {
+        await fireAutomation("user_started");
+      } else if (text) {
+        await fireAutomation("message_received");
+      }
     }
     await recordEvent(botId, "webhook", "handled", {
       ok: true,
@@ -357,18 +392,51 @@ async function upsertBotUser(
     languageCode: from.language_code ?? null,
   };
 
-  return prisma.telegramBotUser.upsert({
+  // `upsert` yozuv YANGI yaratilganini aytmaydi, `user_joined` triggeri esa
+  // aynan shuni bilishi kerak.
+  //
+  // Shuning uchun avval qaraymiz (indeks bo'yicha, arzon), topilmasa
+  // yaratamiz. Yaratish paytida poyga bo'lsa unikal cheklov ushlaydi —
+  // ya'ni aniqlik yo'qolmaydi, lekin QAYTGAN foydalanuvchi uchun ortiqcha
+  // xato logi ham chiqmaydi.
+  const existing = await prisma.telegramBotUser.findUnique({
+    where: { botId_telegramUserId: { botId, telegramUserId: String(from.id) } },
+    select: { id: true },
+  });
+
+  if (!existing) {
+    try {
+      const created = await prisma.telegramBotUser.create({
+        data: {
+          botId,
+          telegramUserId: String(from.id),
+          firstName: from.first_name ?? null,
+          ...profile,
+        },
+      });
+      return { ...created, isNew: true };
+    } catch (error) {
+      // Bir vaqtda kelgan ikkinchi update — quyida yangilaymiz.
+      if (!isUniqueViolation(error)) throw error;
+    }
+  }
+
+  const updated = await prisma.telegramBotUser.update({
     where: { botId_telegramUserId: { botId, telegramUserId: String(from.id) } },
     // `firstName` yangilanmaydi: `collect_name` bilan kiritilgan ism
     // Telegram profilidagi qiymat bilan qayta yozilib ketmasin.
-    update: { ...profile, lastActiveAt: new Date() },
-    create: {
-      botId,
-      telegramUserId: String(from.id),
-      firstName: from.first_name ?? null,
-      ...profile,
-    },
+    data: { ...profile, lastActiveAt: new Date() },
   });
+  return { ...updated, isNew: false };
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: string }).code === "P2002"
+  );
 }
 
 async function logMessage(

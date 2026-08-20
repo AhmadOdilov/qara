@@ -867,9 +867,15 @@ model TelegramBotAutomation {
   /// on_start | on_new_user | schedule | on_order | on_payment | on_keyword
   trigger       String
   triggerConfig Json    @default("{}")
+  /// Shartlar: { op: "and" | "or", rules: [...] }. Bo'sh bo'lsa har doim bajariladi.
+  conditions    Json    @default("{}")
   /// Ketma-ket bajariladigan amallar
   actions       Json    @default("[]")
   enabled       Boolean @default(true)
+
+  /// draft | published | disabled — FAQAT `published` runtime'da ishlaydi.
+  /// `enabled` eski yozuvlar uchun qoladi va nashr paytida moslanadi.
+  status String @default("draft")
 
   lastRunAt DateTime?
   runCount  Int       @default(0)
@@ -877,10 +883,51 @@ model TelegramBotAutomation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  bot  TelegramBot                @relation(fields: [botId], references: [id], onDelete: Cascade)
+  runs TelegramBotAutomationRun[]
 
   @@index([botId])
+  @@index([botId, status, trigger])
   @@map("telegram_bot_automations")
+}
+
+/// Bitta avtomat ishga tushishi — bajarilish yozuvi va idempotentlik.
+///
+/// `(automationId, dedupeKey)` UNIKAL: bitta hodisa bitta avtomatni ikki
+/// marta ishga tushira olmaydi. Telegram update takroriy yetkazilsa ham,
+/// `claimUpdate()` dan o'tib kelgan taqdirda ham shu yerda to'xtaydi.
+model TelegramBotAutomationRun {
+  id           String @id @default(cuid())
+  automationId String
+  botId        String
+
+  /// Qaysi hodisa ishga tushirdi.
+  triggerEvent String
+  /// Hodisadan hosil qilingan takrorlanmas kalit.
+  dedupeKey    String
+
+  /// running | completed | failed | skipped
+  status String @default("running")
+
+  /// Ichma-ich ishga tushirishlar chuqurligi — cheksiz sikldan himoya.
+  depth      Int @default(0)
+  actionsRun Int @default(0)
+
+  /// Qaysi amalda yiqildi va nima uchun.
+  failedAction String?
+  error        String?
+  retryCount   Int     @default(0)
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  durationMs Int?
+
+  automation TelegramBotAutomation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@unique([automationId, dedupeKey])
+  @@index([botId, startedAt])
+  @@index([automationId, status])
+  @@map("telegram_bot_automation_runs")
 }
 
 /// To'lovlar. Karta ma'lumotlari HECH QACHON saqlanmaydi — faqat
