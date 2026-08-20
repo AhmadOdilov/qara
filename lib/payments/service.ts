@@ -2,6 +2,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/bots/audit";
+import { dispatch } from "@/lib/automation/dispatch";
 import {
   canTransition,
   checkAgainstOrder,
@@ -117,7 +118,14 @@ export async function applyCallback(input: {
 }): Promise<ApplyResult> {
   const order = await prisma.telegramBotPayment.findFirst({
     where: { botId: input.botId, orderId: input.orderCode },
-    select: { id: true, botId: true, amount: true, currency: true, status: true },
+    select: {
+      id: true,
+      botId: true,
+      amount: true,
+      currency: true,
+      status: true,
+      telegramUserId: true,
+    },
   });
 
   // Summa, valyuta, egalik — hammasi yozishdan OLDIN.
@@ -130,6 +138,68 @@ export async function applyCallback(input: {
   if (!check.ok) return { ok: false, reason: check.reason };
   if (!order) return { ok: false, reason: "order_not_found" };
 
+  const applied = await applyInTransaction(input, order);
+
+  /*
+    Avtomat TRANZAKSIYADAN TASHQARIDA ishga tushadi.
+
+    Sabab: avtomat ichida xabar yuborish, webhook chaqirish va teg qo'yish
+    bo'lishi mumkin. Ular tranzaksiya ichida bo'lsa — sekin tashqi so'rov
+    baza qulfini ushlab turardi, avtomat xatosi esa TO'LOVNI qaytarib
+    yuborardi. To'lov allaqachon yozilgan; avtomat faqat undan keyin keladi.
+  */
+  if (applied.ok && !applied.alreadyApplied) {
+    const trigger =
+      applied.status === "paid"
+        ? "payment_successful"
+        : applied.status === "failed"
+          ? "payment_failed"
+          : null;
+
+    if (trigger) {
+      void dispatch({
+        botId: input.botId,
+        trigger,
+        // Provayder tranzaksiyasi takrorlanmas.
+        dedupeKey: `${trigger}:${input.providerTransactionId}`,
+        context: {
+          event: { name: trigger },
+          order: {
+            code: input.orderCode,
+            amount: input.amount,
+            currency: input.currency,
+          },
+          payment: { provider: input.provider, status: applied.status },
+        },
+        // Buyurtma egasini avtomatga uzatamiz — teg qo'yish va xabar
+        // yuborish uchun kerak.
+        telegramUserId: order.telegramUserId,
+      });
+    }
+  }
+
+  return applied;
+}
+
+async function applyInTransaction(
+  input: {
+    botId: string;
+    provider: PaymentProviderId;
+    providerTransactionId: string;
+    orderCode: string;
+    amount: number;
+    currency: string;
+    nextStatus: PaymentStatus;
+    metadata?: Record<string, unknown>;
+  },
+  order: {
+    id: string;
+    botId: string;
+    amount: number;
+    currency: string;
+    status: string;
+  },
+): Promise<ApplyResult> {
   try {
     return await prisma.$transaction(async (tx) => {
       // Provayder tranzaksiyasini BAND QILAMIZ. Unikal indeks tufayli bir

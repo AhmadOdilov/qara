@@ -65,7 +65,6 @@ export function AppShell({
       href: "/automations",
       label: t.nav.automations,
       icon: <IconBolt width={18} height={18} />,
-      soon: true,
     },
     {
       href: "/analytics",

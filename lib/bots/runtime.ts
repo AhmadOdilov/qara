@@ -170,6 +170,8 @@ export async function handleBotUpdate(
       isAdmin: botUser.tags.includes("admin"),
     } satisfies ViewerContext,
     replyOptions: {},
+    // Avtomat idempotentligi uchun — tugma bosilishi shu kalitdan foydalanadi.
+    eventKey: String(update.update_id ?? `${chatId}:${started}`),
     // Callback qaysi xabardan kelgani — menyuni joyida tahrirlash uchun (§1).
     ...(callback?.message?.message_id !== undefined
       ? { messageId: callback.message.message_id }
@@ -213,7 +215,11 @@ export async function handleBotUpdate(
       if (text.startsWith("/start")) {
         await fireAutomation("user_started");
       } else if (text) {
+        // Ikkalasi ham ishga tushadi: umumiy `message_received` va kalit
+        // so'zga bog'langan `keyword_received`. Ikkinchisi dispetcherda
+        // `triggerConfig.keyword` bo'yicha filtrlanadi.
         await fireAutomation("message_received");
+        await fireAutomation("keyword_received");
       }
     }
     await recordEvent(botId, "webhook", "handled", {

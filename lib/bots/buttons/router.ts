@@ -1,6 +1,7 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { dispatch } from "@/lib/automation/dispatch";
 import { recordEvent } from "@/lib/bots/audit";
 import type { BotTransport } from "@/lib/bots/transport";
 import { executeAction, type ActionResult, type CartDirective } from "@/lib/bots/buttons/actions";
@@ -81,6 +82,8 @@ export type RouterContext = {
   messageId?: number;
   /// Ildiz menyusi sarlavhasi (`/start` javobi)
   rootText?: string;
+  /// Update'ni takrorlanmas qiladigan kalit — avtomat idempotentligi uchun.
+  eventKey?: string;
 };
 
 type PendingState = {
@@ -698,7 +701,38 @@ async function createOrder(
     where: { id: payment.id },
     data: { orderId: code },
   });
+
+  // Buyurtma YOZILGANDAN KEYIN. Yuqoridagi yozuv yiqilsa bu yergacha
+  // yetib kelinmaydi, ya'ni mavjud bo'lmagan buyurtma uchun avtomat
+  // ishga tushmaydi.
+  void dispatch({
+    botId: ctx.botId,
+    trigger: "order_created",
+    // Buyurtma kodi takrorlanmas — kalit sifatida aynan shu to'g'ri keladi.
+    dedupeKey: `order_created:${code}`,
+    context: {
+      event: { name: "order_created" },
+      user: automationUser(ctx),
+      order: { code, amount: directive.total, currency: directive.currency },
+    },
+    transport: ctx.transport,
+    chatId: ctx.chatId,
+    botUserId: ctx.botUserId,
+  });
+
   return code;
+}
+
+/** Avtomat konteksti uchun foydalanuvchi surati. */
+function automationUser(ctx: RouterContext) {
+  return {
+    telegramUserId: ctx.telegramUserId,
+    username: ctx.viewer.username,
+    languageCode: ctx.viewer.languageCode,
+    phone: ctx.viewer.phone,
+    messageCount: ctx.viewer.messageCount,
+    tags: ctx.viewer.tags,
+  };
 }
 
 /**
@@ -1027,6 +1061,22 @@ async function setLanguage(ctx: RouterContext, lang: string): Promise<void> {
 /* ── Analitika ───────────────────────────────────────────────────────────── */
 
 async function recordClick(ctx: RouterContext, button: ButtonRecord): Promise<void> {
+  // Avtomat NORMAL javobdan KEYIN ishga tushadi va `dispatch()` hech qachon
+  // xato tashlamaydi — ya'ni avtomat yiqilsa ham tugma javobi buzilmaydi.
+  void dispatch({
+    botId: ctx.botId,
+    trigger: "button_clicked",
+    dedupeKey: `button_clicked:${ctx.eventKey ?? button.id}:${button.id}`,
+    context: {
+      event: { name: "button_clicked" },
+      user: automationUser(ctx),
+      button: { id: button.id, text: button.text },
+    },
+    transport: ctx.transport,
+    chatId: ctx.chatId,
+    botUserId: ctx.botUserId,
+  });
+
   await Promise.all([
     prisma.telegramBotButton
       .update({ where: { id: button.id }, data: { clickCount: { increment: 1 } } })

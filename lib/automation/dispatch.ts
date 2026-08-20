@@ -40,11 +40,22 @@ export type DispatchInput = {
   /** Xabar yuboriladigan chat. Yo'q bo'lsa `send_message` o'tkazib yuboriladi. */
   chatId?: string;
   botUserId?: string;
+  /**
+   * Bot foydalanuvchisi Telegram id'si.
+   *
+   * To'lov va buyurtma hodisalari runtime kontekstidan tashqarida yuz beradi,
+   * ya'ni ular `botUserId` ni bilmaydi. Shu qiymat berilsa dispetcher
+   * foydalanuvchini o'zi topadi — aks holda `add_tag` va `send_message`
+   * jimgina o'tkazib yuborilardi.
+   */
+  telegramUserId?: string;
 };
 
 export async function dispatch(input: DispatchInput): Promise<void> {
   try {
     if (!isLiveTrigger(input.trigger)) return;
+
+    const resolved = await resolveRecipient(input);
 
     const rows = await prisma.telegramBotAutomation.findMany({
       where: {
@@ -59,13 +70,21 @@ export async function dispatch(input: DispatchInput): Promise<void> {
         id: true,
         name: true,
         trigger: true,
+        triggerConfig: true,
         conditions: true,
         actions: true,
       },
     });
 
     for (const row of rows) {
-      await runOne(row, input);
+      // `keyword_received` uchun qo'shimcha filtr: avtomat o'z kalit so'zini
+      // `triggerConfig` da saqlaydi. Mos kelmasa umuman ishga tushmaydi —
+      // bajarilish yozuvi ham yaratilmaydi, aks holda jurnal har bir xabarda
+      // «skipped» bilan to'lib ketardi.
+      if (input.trigger === "keyword_received" && !matchesKeyword(row.triggerConfig, input)) {
+        continue;
+      }
+      await runOne(row, resolved);
     }
   } catch (error) {
     // Avtomatlashtirish botning asosiy ishini yiqitmasligi kerak.
@@ -74,6 +93,51 @@ export async function dispatch(input: DispatchInput): Promise<void> {
       detail: { reason: error instanceof Error ? error.message : "noma'lum" },
     }).catch(() => undefined);
   }
+}
+
+/**
+ * Kerak bo'lsa bot foydalanuvchisini topadi.
+ *
+ * Runtime'dan kelgan hodisada `botUserId` allaqachon bor; to'lov va
+ * buyurtma hodisalarida esa faqat Telegram id'si ma'lum bo'ladi.
+ */
+async function resolveRecipient(input: DispatchInput): Promise<DispatchInput> {
+  if (input.botUserId || !input.telegramUserId) return input;
+
+  const user = await prisma.telegramBotUser.findUnique({
+    where: {
+      botId_telegramUserId: {
+        botId: input.botId,
+        telegramUserId: input.telegramUserId,
+      },
+    },
+    select: { id: true, chatId: true, blocked: true },
+  });
+
+  // Bloklangan foydalanuvchiga yozmaymiz, lekin teg qo'yish mumkin.
+  if (!user) return input;
+  return {
+    ...input,
+    botUserId: user.id,
+    chatId: user.blocked ? undefined : (input.chatId ?? user.chatId),
+  };
+}
+
+/**
+ * Xabar avtomatning kalit so'ziga mos keladimi.
+ *
+ * Taqqoslash registrga bog'liq emas va so'z BUTUN xabar ichida qidiriladi —
+ * foydalanuvchi «narx qancha?» deb yozsa ham «narx» avtomati ishlaydi.
+ */
+function matchesKeyword(config: unknown, input: DispatchInput): boolean {
+  const keyword =
+    typeof config === "object" && config !== null && "keyword" in config
+      ? String((config as { keyword?: unknown }).keyword ?? "").trim().toLowerCase()
+      : "";
+  if (!keyword) return false;
+
+  const text = (input.context.message?.text ?? "").trim().toLowerCase();
+  return text.length > 0 && text.includes(keyword);
 }
 
 async function runOne(
