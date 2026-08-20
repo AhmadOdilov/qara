@@ -1,0 +1,1085 @@
+// Qara — ma'lumot modeli
+// PDF "Ma'lumot modeli va ER-diagramma" bo'limiga muvofiq:
+// Users, TelegramLinks, Messages, Sessions, Analytics
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  user
+  admin
+}
+
+/// Workspace ichidagi rol (§56 RBAC). Platforma darajasidagi `Role` dan
+/// mustaqil: `Role.admin` — Qara xodimi, bu esa mijoz jamoasidagi huquq.
+enum WorkspaceRole {
+  owner
+  admin
+  editor
+  support
+  viewer
+}
+
+enum Lang {
+  uz
+  ru
+  en
+}
+
+/// Foydalanuvchilar. Google OAuth (googleId) yoki email+parol (passwordHash)
+/// orqali ro'yxatdan o'tadi — kamida bittasi to'ldirilgan bo'ladi.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String?
+  googleId     String?  @unique
+  name         String
+  avatarUrl    String?
+  role         Role     @default(user)
+  lang         Lang     @default(uz)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Bildirishnoma sozlamalari (PDF: disable_notification bilan tinch xabarlar)
+  notifyTelegram Boolean @default(true)
+  notifyEmail    Boolean @default(false)
+  quietHours     Boolean @default(false)
+
+  telegramLink TelegramLink?
+  messages     Message[]
+  sessions     Session[]
+  analytics    AnalyticsEvent[]
+
+  // Bot konstruktori (Telegram Bots)
+  bots      TelegramBot[]
+  botDrafts TelegramBotDraft[]
+  auditLogs TelegramBotAuditLog[]
+
+  memberships WorkspaceMember[]
+  apiKeys     ApiKey[]
+
+  @@index([createdAt])
+  @@map("users")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  WORKSPACE — ko'p ijarachilik (§56). Har bir resurs workspace'ga tegishli.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Ish maydoni: botlar, do'konlar va boshqa resurslar shu yerga bog'lanadi.
+/// Har bir foydalanuvchi kamida bitta shaxsiy workspace egasi bo'ladi —
+/// u birinchi murojaatda avtomatik yaratiladi.
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members    WorkspaceMember[]
+  bots       TelegramBot[]
+  blueprints BotBlueprint[]
+  apiKeys    ApiKey[]
+
+  @@map("workspaces")
+}
+
+/// Foydalanuvchi ↔ workspace a'zoligi va roli.
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(viewer)
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId, createdAt])
+  @@map("workspace_members")
+}
+
+/// Foydalanuvchi ↔ Telegram bog'lanishi. Deep link (/start <token>) orqali
+/// hosil bo'ladi; chat_id shu yerda saqlanadi.
+model TelegramLink {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  telegramUserId String?   @unique
+  telegramChatId String?   @unique
+  username       String?
+  firstName      String?
+  languageCode   String?
+  /// Deep link maxfiy kaliti — /start <linkToken> bilan keladi
+  linkToken      String    @unique
+  linkTokenExp   DateTime
+  connectedAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("telegram_links")
+}
+
+enum MessageDirection {
+  /// Vebdan Telegramga (fromUser = true)
+  outgoing
+  /// Telegramdan vebga (fromUser = false)
+  incoming
+}
+
+enum MessageStatus {
+  pending
+  sent
+  failed
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  userId         String
+  telegramUserId String?
+  telegramMsgId  Int?
+  direction      MessageDirection
+  /// PDF ER-diagrammasidagi `fromUser` maydoni: 1 = foydalanuvchidan, 0 = botdan
+  fromUser       Boolean
+  content        String
+  /// text | photo | document | sticker | ...
+  kind           String           @default("text")
+  status         MessageStatus    @default(sent)
+  error          String?
+  timestamp      DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, timestamp])
+  @@index([timestamp])
+  @@map("messages")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  sessionToken String   @unique
+  userAgent    String?
+  ip           String?
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Analitika hodisalari: message_sent, message_received, login, signup,
+/// telegram_linked, lang_changed ...
+model AnalyticsEvent {
+  id         String   @id @default(cuid())
+  userId     String?
+  event      String
+  value      Int      @default(1)
+  meta       Json?
+  recordedAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([event, recordedAt])
+  @@index([recordedAt])
+  @@map("analytics")
+}
+
+/// Admin panelidan boshqariladigan bot sozlamalari (yagona qator, id = "singleton").
+model BotSettings {
+  id              String   @id @default("singleton")
+  welcomeMessage  String   @default("Salom! Qara bilan bog'landingiz.")
+  /// Foydalanuvchidan kelgan xabarga avtomatik javob (bo'sh bo'lsa — o'chirilgan)
+  autoReply       String?
+  maintenanceMode Boolean  @default(false)
+  /// Bir foydalanuvchi uchun daqiqasiga ruxsat etilgan xabar soni
+  rateLimitPerMin Int      @default(20)
+  updatedAt       DateTime @default(now()) @updatedAt
+
+  @@map("bot_settings")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  BOT KONSTRUKTORI — foydalanuvchi kod yozmasdan Telegram bot yaratadi
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum BotStatus {
+  /// Yaratilgan, webhook o'rnatilgan, ishlayapti
+  active
+  /// Sozlash tugallanmagan (masalan token tasdiqlanmagan)
+  setup_required
+  /// Oxirgi amal xato bilan tugadi (webhook o'rnatilmadi va sh.k.)
+  error
+  /// Egasi tomonidan to'xtatilgan
+  disabled
+}
+
+enum BotSecretType {
+  telegram_token
+  ai_api_key
+  web_search_api_key
+  integration_secret
+}
+
+/// Foydalanuvchi yaratgan Telegram bot.
+model TelegramBot {
+  id               String    @id @default(cuid())
+  /// Resurs egasi bo'lgan ish maydoni (§56). Barcha so'rovlar shu bo'yicha
+  /// filtrlanadi — A workspace hech qachon B workspace botini ko'rmaydi.
+  workspaceId      String
+  /// Botni yaratgan foydalanuvchi (audit uchun). Kirish huquqi `workspaceId`
+  /// va a'zolik roli bilan belgilanadi, bu maydon bilan emas.
+  ownerId          String
+  /// Telegram tomonidagi bot id (getMe.id) — token tasdiqlangach to'ladi
+  telegramBotId    String?   @unique
+  username         String
+  name             String
+  description      String?
+  shortDescription String?
+  category         String    @default("other")
+  avatarUrl        String?
+  status           BotStatus @default(setup_required)
+
+  /// Har bir bot uchun alohida webhook secret (Telegram secret_token)
+  webhookSecret String
+  webhookSetAt  DateTime?
+  lastError     String?
+  lastActiveAt  DateTime?
+
+  /// getMe natijasidan keladigan imkoniyatlar
+  canJoinGroups           Boolean @default(false)
+  canReadAllGroupMessages Boolean @default(false)
+  supportsInlineQueries   Boolean @default(false)
+
+  /// Telegram menyu tugmasi: commands | web_app | url
+  menuButtonType String  @default("commands")
+  menuButtonText String?
+  menuButtonUrl  String?
+
+  /// Mini App (Web App)
+  miniAppEnabled    Boolean @default(false)
+  miniAppName       String?
+  miniAppUrl        String?
+  miniAppButtonText String?
+
+  /// Inline mode — faqat foydalanuvchi yoqqanda
+  inlineEnabled     Boolean @default(false)
+  inlinePlaceholder String?
+  inlineSource      String? // ai | database | api | web_search
+
+  /// Tanlangan funksiyalar ro'yxati (feature kartalari)
+  features String[] @default([])
+
+  /// Developer mode — dashboardda texnik tafsilotlarni ko'rsatish
+  developerMode Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace        Workspace                    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  owner            User                         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  secrets          TelegramBotSecret[]
+  aiConfig         TelegramBotAiConfig?
+  webSearch        TelegramBotWebSearch?
+  commands         TelegramBotCommand[]
+  buttons          TelegramBotButton[]
+  buttonVersions   TelegramBotButtonVersion[]
+  integrations     TelegramBotIntegration[]
+  workflows        TelegramBotWorkflow[]
+  knowledgeSources TelegramBotKnowledgeSource[]
+  botUsers         TelegramBotUser[]
+  botMessages      TelegramBotMessage[]
+  auditLogs        TelegramBotAuditLog[]
+  automations      TelegramBotAutomation[]
+  payments         TelegramBotPayment[]
+  events           TelegramBotEvent[]
+  updateReceipts   TelegramUpdateReceipt[]
+  miniApp          MiniApp?
+
+  @@index([workspaceId, createdAt])
+  @@index([ownerId, createdAt])
+  @@map("telegram_bots")
+}
+
+enum MiniAppStatus {
+  draft
+  published
+  unpublished
+}
+
+/// Bot ichida ochiladigan Mini App (Telegram Web App).
+///
+/// Qoralama/nashr ajratmasi tugmalar tizimidagidek: `MiniAppPage.components`
+/// — konstruktor tahrirlaydigan jonli qoralama, `MiniAppDeployment.schema` esa
+/// Telegram ochadigan SURAT. Shu sababli yarim tahrirlangan sahifa hech qachon
+/// foydalanuvchiga ko'rinmaydi.
+///
+/// Public manzil: `{APP_URL}/mini-app/<MiniApp.id>`.
+model MiniApp {
+  id          String        @id @default(cuid())
+  /// Bitta botga bitta Mini App
+  botId       String        @unique
+  /// Tenant izolyatsiyasi uchun nusxa — har bir so'rov shu bo'yicha filtrlanadi
+  workspaceId String
+  name        String
+  status      MiniAppStatus @default(draft)
+  /// Telegram mavzusi ustidan qo'shimcha sozlama: { accent, radius, ... }
+  theme       Json          @default("{}")
+  /// { headerTitle, showBackButton, mainButtonText, ... }
+  settings    Json          @default("{}")
+
+  publishedAt DateTime?
+  createdById String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /**
+   * API chaqiruvlari uchun ruxsat etilgan domenlar.
+   *
+   * Bo'sh bo'lsa — SSRF himoyasining umumiy qoidalari ishlaydi (ichki tarmoq
+   * yopiq). To'ldirilsa — faqat shu domenlarga chiqiladi, ya'ni eng qattiq
+   * rejim. Tavsiya: doim to'ldirish.
+   */
+  apiAllowlist String[] @default([])
+
+  bot         TelegramBot         @relation(fields: [botId], references: [id], onDelete: Cascade)
+  pages       MiniAppPage[]
+  deployments MiniAppDeployment[]
+  events      MiniAppEvent[]
+  endpoints   MiniAppEndpoint[]
+
+  @@index([workspaceId])
+  @@map("mini_apps")
+}
+
+/**
+ * Mini App chaqira oladigan tashqi API nuqtasi.
+ *
+ * MUHIM QAROR: manzilni KLIENT BERMAYDI. Klient faqat shu yozuvning id'sini
+ * yuboradi, manzil, metod va sarlavhalar esa serverdan olinadi. Shu sababli
+ * foydalanuvchi ixtiyoriy manzilga so'rov yubora olmaydi — SSRF hujumining
+ * eng keng yo'li shu bilan yopiladi.
+ *
+ * `headers` ichida API kalitlari bo'lishi mumkin, shuning uchun ular
+ * konstruktorga MASKALANIB qaytariladi va hech qachon Mini App'ga tushmaydi.
+ */
+model MiniAppEndpoint {
+  id        String @id @default(cuid())
+  miniAppId String
+  name      String
+  /// GET | POST | PUT | PATCH | DELETE
+  method    String @default("GET")
+  url       String
+  /// Server qo'shadigan sarlavhalar: { "Authorization": "Bearer …" }
+  headers   Json   @default("{}")
+  /// Tana shabloni: { "email": "{{email}}" } — forma qiymatlari joylashadi
+  bodyTemplate Json?
+  /// Javobdan nima olinadi: { "message": "data.message" }
+  responseMap  Json   @default("{}")
+  timeoutMs    Int    @default(8000)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  miniApp MiniApp @relation(fields: [miniAppId], references: [id], onDelete: Cascade)
+
+  @@unique([miniAppId, name])
+  @@map("mini_app_endpoints")
+}
+
+/// Mini App sahifasi. Komponentlar daraxti JSON bo'lib shu yerda yotadi —
+/// alohida jadval qilinmadi: daraxt doim butunligicha o'qiladi va yoziladi,
+/// nashr esa uni surat sifatida muzlatadi.
+model MiniAppPage {
+  id        String  @id @default(cuid())
+  miniAppId String
+  name      String
+  /// Navigatsiya manzili: `home`, `products`, `cart`
+  slug      String
+  title     String?
+  /// Mini App ochilganda birinchi ko'rinadigan sahifa
+  isHome    Boolean @default(false)
+  sortOrder Int     @default(0)
+  /// Komponentlar daraxti — `[{ id, type, props, children }]`
+  components Json   @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  miniApp MiniApp @relation(fields: [miniAppId], references: [id], onDelete: Cascade)
+
+  @@unique([miniAppId, slug])
+  @@index([miniAppId, sortOrder])
+  @@map("mini_app_pages")
+}
+
+/// Nashr surati. Har «Publish» yangi versiya yaratadi va bir bosishda
+/// qaytariladi — tugmalar tizimidagi `TelegramBotButtonVersion` bilan bir xil.
+model MiniAppDeployment {
+  id        String @id @default(cuid())
+  miniAppId String
+  version   Int
+  /// To'liq surat: `{ app: {...}, pages: [...] }`
+  schema    Json
+  /// Nashr paytidagi qisqa xulosa: { pages, components }
+  summary   Json?
+
+  publishedById String
+  publishedAt   DateTime @default(now())
+
+  miniApp MiniApp @relation(fields: [miniAppId], references: [id], onDelete: Cascade)
+
+  @@unique([miniAppId, version])
+  @@index([miniAppId, publishedAt])
+  @@map("mini_app_deployments")
+}
+
+/// Mini App hodisalari — analitika uchun (§21).
+model MiniAppEvent {
+  id             String  @id @default(cuid())
+  miniAppId      String
+  /// open | page_view | button_click | api_call | error
+  eventType      String
+  telegramUserId String?
+  pageSlug       String?
+  detail         Json?
+
+  createdAt DateTime @default(now())
+
+  miniApp MiniApp @relation(fields: [miniAppId], references: [id], onDelete: Cascade)
+
+  @@index([miniAppId, createdAt])
+  @@index([miniAppId, eventType])
+  @@map("mini_app_events")
+}
+
+/// AI rejasi (§6–7, §45). Foydalanuvchi g'oyani yozadi, AI to'liq bot
+/// konfiguratsiyasini tuzadi va u shu yerda QORALAMA sifatida turadi.
+/// Faqat foydalanuvchi tasdiqlaganda haqiqiy botga aylanadi.
+model BotBlueprint {
+  id          String  @id @default(cuid())
+  workspaceId String
+  createdById String?
+
+  /// Foydalanuvchi kiritgan erkin tavsif ("I want a bot for my clothing store")
+  prompt     String
+  /// Reja qaysi qatlamdan keldi: `claude` | `rule_based`
+  source     String  @default("rule_based")
+  /// Tanlangan shablon (bo'lsa)
+  templateId String?
+
+  /// To'liq deklarativ reja: { name, description, category, features,
+  /// commands, buttons, ai, integrations }. Bajariladigan kod EMAS (§60).
+  plan Json
+
+  /// draft | applied | discarded
+  status String  @default("draft")
+  /// Qo'llangandan keyin hosil bo'lgan bot
+  botId  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@map("bot_blueprints")
+}
+
+/// Sirlar alohida jadvalda: asosiy yozuvni o'qiganda ular yuklanmaydi va
+/// tasodifan API javobiga tushib ketmaydi.
+model TelegramBotSecret {
+  id             String        @id @default(cuid())
+  botId          String
+  secretType     BotSecretType
+  /// Qo'shimcha ajratgich: integratsiyalar uchun integration id
+  scope          String        @default("default")
+  encryptedValue String
+  /// UI'da ko'rsatish uchun maskalangan ko'rinish (sir emas)
+  maskedHint     String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, secretType, scope])
+  @@map("telegram_bot_secrets")
+}
+
+model TelegramBotAiConfig {
+  id           String  @id @default(cuid())
+  botId        String  @unique
+  enabled      Boolean @default(true)
+  /// openai_compatible | openai | anthropic | google | custom
+  provider     String  @default("openai_compatible")
+  baseUrl      String?
+  model        String  @default("")
+  systemPrompt String  @default("")
+  temperature  Float   @default(0.7)
+  maxTokens    Int     @default(1024)
+
+  /// System prompt builder maydonlari (promptni qayta hosil qilish uchun)
+  knowledgeText String?
+  personality   String  @default("friendly")
+  langMode      String  @default("auto")
+  responseStyle String  @default("normal")
+
+  /// off | short | long
+  memoryMode  String @default("short")
+  memoryLimit Int    @default(20)
+
+  /// AI qaysi vositalarni chaqira olishi — ochiq ruxsat ro'yxati
+  toolWebSearch Boolean @default(false)
+  toolKnowledge Boolean @default(false)
+  toolApi       Boolean @default(false)
+  toolDatabase  Boolean @default(false)
+  toolPayments  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@map("telegram_bot_ai_configs")
+}
+
+model TelegramBotWebSearch {
+  id             String   @id @default(cuid())
+  botId          String   @unique
+  enabled        Boolean  @default(false)
+  /// tavily | brave | serper | custom
+  provider       String   @default("tavily")
+  baseUrl        String?
+  depth          String   @default("basic")
+  maxResults     Int      @default(5)
+  searchLang     String   @default("auto")
+  allowedDomains String[] @default([])
+  blockedDomains String[] @default([])
+
+  searchCount  Int       @default(0)
+  errorCount   Int       @default(0)
+  totalLatency Int       @default(0)
+  lastUsedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@map("telegram_bot_web_search")
+}
+
+model TelegramBotCommand {
+  id           String  @id @default(cuid())
+  botId        String
+  /// Slashsiz saqlanadi: "start", "help"
+  command      String
+  description  String
+  /// send_message | open_url | open_mini_app | call_api | web_search |
+  /// ask_ai | show_menu | start_flow | collect_data | admin_action
+  actionType   String  @default("send_message")
+  actionConfig Json    @default("{}")
+  enabled      Boolean @default(true)
+  sortOrder    Int     @default(0)
+
+  usageCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, command])
+  @@index([botId, sortOrder])
+  @@map("telegram_bot_commands")
+}
+
+model TelegramBotButton {
+  id       String  @id @default(cuid())
+  botId    String
+  /// Submenu uchun ota tugma
+  parentId String?
+  text     String
+  emoji    String?
+
+  /// Telegram tugmasining turi. `keyboardKind` qaysi klaviaturaga tushishini,
+  /// `buttonType` esa o'sha klaviatura ichida qanday tugma bo'lishini belgilaydi.
+  ///   reply  → text | contact | location
+  ///   inline → callback | url | mini_app | inline_mode
+  /// submenu va dynamic ikkalasida ham ishlaydi.
+  buttonType String @default("text")
+
+  /// send_message | submenu | back | open_url | open_mini_app | collect_phone |
+  /// collect_location | collect_name | collect_email | change_language |
+  /// close_menu | contact_admin | ai_chat | web_search | call_api |
+  /// start_workflow | admin_action | custom
+  actionType   String @default("send_message")
+  actionConfig Json   @default("{}")
+
+  /// inline (callback tugmalari) yoki reply (klaviatura)
+  keyboardKind String @default("reply")
+
+  /// Klaviatura panjarasi: qaysi qatorda va qatorda nechanchi o'rinda.
+  /// `columns` eski yozuvlar uchun qoladi — yangi tartib rowIndex bilan quriladi.
+  rowIndex Int @default(0)
+  columns  Int @default(1)
+
+  /// `callback_data` ichiga tushadigan xavfsiz identifikator.
+  /// Sir emas va sir tutilmaydi — server shu bo'yicha tugmani bazadan topadi.
+  callbackId String?
+
+  /// { audience: "everyone" | "admin" | "tagged" | "new" | "existing",
+  ///   tags: string[] }
+  visibility Json @default("{}")
+
+  /// [{ field, operator, value }] — hammasi bajarilsa tugma ko'rinadi
+  conditions Json @default("[]")
+
+  enabled   Boolean @default(true)
+  adminOnly Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  clickCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot      TelegramBot              @relation(fields: [botId], references: [id], onDelete: Cascade)
+  parent   TelegramBotButton?       @relation("ButtonTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children TelegramBotButton[]      @relation("ButtonTree")
+  events   TelegramBotButtonEvent[]
+
+  @@unique([botId, callbackId])
+  @@index([botId, parentId, sortOrder])
+  @@index([botId, rowIndex, sortOrder])
+  @@map("telegram_bot_buttons")
+}
+
+/// Tugma analitikasi: ko'rsatilgan, bosilgan, xato bergan hodisalar.
+model TelegramBotButtonEvent {
+  id             String @id @default(cuid())
+  botId          String
+  buttonId       String
+  telegramUserId String
+  /// shown | click | action_ok | action_error
+  eventType      String
+  metadata       Json?
+
+  createdAt DateTime @default(now())
+
+  button TelegramBotButton @relation(fields: [buttonId], references: [id], onDelete: Cascade)
+
+  @@index([botId, createdAt])
+  @@index([buttonId, eventType, createdAt])
+  @@map("telegram_bot_button_events")
+}
+
+/// Nashr etilgan tugmalar daraxtining suratlari.
+///
+/// Tahrirlash `telegram_bot_buttons` ustida (qoralama) ketadi, bot esa
+/// faqat nashr etilgan suratni ishlatadi — shuning uchun yarim tahrirlangan
+/// menyu hech qachon jonli botga tushmaydi.
+model TelegramBotButtonVersion {
+  id      String @id @default(cuid())
+  botId   String
+  version Int
+  /// Tugma yozuvlarining to'liq nusxasi
+  tree    Json
+  /// Nashrdagi o'zgarishlar xulosasi: { added, updated, removed }
+  summary Json?
+
+  publishedById String?
+  publishedAt   DateTime @default(now())
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, version])
+  @@index([botId, publishedAt])
+  @@map("telegram_bot_button_versions")
+}
+
+model TelegramBotIntegration {
+  id             String   @id @default(cuid())
+  botId          String
+  name           String
+  /// rest_api | graphql | webhook | google_sheets | postgres | mysql |
+  /// crm | payment | delivery | weather | maps | custom
+  type           String   @default("rest_api")
+  baseUrl        String?
+  /// none | api_key | bearer | basic
+  authType       String   @default("none")
+  /// Kalit joylashadigan sarlavha nomi (qiymati sirlar jadvalida)
+  authHeader     String   @default("Authorization")
+  headers        Json     @default("{}")
+  timeoutMs      Int      @default(10000)
+  /// Ruxsat etilgan HTTP metodlari
+  allowedMethods String[] @default(["GET"])
+  /// AI chaqira oladigan aniq endpointlar (tool sifatida ochiladi)
+  endpoints      Json     @default("[]")
+  enabled        Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@map("telegram_bot_integrations")
+}
+
+model TelegramBotWorkflow {
+  id           String  @id @default(cuid())
+  botId        String
+  name         String
+  /// Deklarativ tugunlar grafi: { nodes: [...], edges: [...] }
+  definition   Json    @default("{}")
+  enabled      Boolean @default(true)
+  /// Qaysi hodisada ishga tushadi: command | button | keyword | manual
+  trigger      String  @default("manual")
+  triggerValue String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@map("telegram_bot_workflows")
+}
+
+model TelegramBotKnowledgeSource {
+  id            String    @id @default(cuid())
+  botId         String
+  /// file | url
+  type          String
+  name          String
+  url           String?
+  fileUrl       String?
+  mimeType      String?
+  sizeBytes     Int       @default(0)
+  /// pending | indexing | ready | error
+  status        String    @default("pending")
+  error         String?
+  chunkCount    Int       @default(0)
+  lastIndexedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot    TelegramBot                 @relation(fields: [botId], references: [id], onDelete: Cascade)
+  chunks TelegramBotKnowledgeChunk[]
+
+  @@index([botId])
+  @@map("telegram_bot_knowledge_sources")
+}
+
+/// RAG bo'laklari. pgvector mavjud bo'lmagani uchun embedding `Float[]`
+/// sifatida saqlanadi va o'xshashlik server tomonda hisoblanadi — kichik va
+/// o'rta hajmdagi bazalar uchun yetarli (README'da pgvector'ga o'tish yo'li).
+model TelegramBotKnowledgeChunk {
+  id        String  @id @default(cuid())
+  sourceId  String
+  botId     String
+  ordinal   Int
+  content   String
+  tokens    Int     @default(0)
+  embedding Float[] @default([])
+
+  createdAt DateTime @default(now())
+
+  source TelegramBotKnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@index([sourceId, ordinal])
+  @@map("telegram_bot_knowledge_chunks")
+}
+
+/// Botning oxirgi foydalanuvchilari (Telegram tomonidagi odamlar).
+model TelegramBotUser {
+  id             String   @id @default(cuid())
+  botId          String
+  telegramUserId String
+  chatId         String
+  username       String?
+  firstName      String?
+  lastName       String?
+  languageCode   String?
+  phone          String?
+  email          String?
+  /// Telegram profil rasmi — Mini App `initData` bilan keladi
+  photoUrl       String?
+  /// Workflow'lar to'playdigan o'zgaruvchilar
+  variables      Json     @default("{}")
+  tags           String[] @default([])
+  blocked        Boolean  @default(false)
+  /// Foydalanuvchi hozir qaysi qadamda turibdi (flow/collect holati)
+  pendingState   Json?
+
+  messageCount Int      @default(0)
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bot      TelegramBot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  messages TelegramBotMessage[]
+
+  @@unique([botId, telegramUserId])
+  @@index([botId, lastActiveAt])
+  @@map("telegram_bot_users")
+}
+
+model TelegramBotMessage {
+  id             String   @id @default(cuid())
+  botId          String
+  botUserId      String
+  telegramUserId String
+  /// `in` (foydalanuvchidan) | `out` (botdan) — `lib/bots/runtime.ts` shu
+  /// qisqa shakllarni yozadi. Platformadagi `Message.direction` enum'i bilan
+  /// adashtirmang: u boshqa jadval va boshqa qiymatlar (incoming/outgoing).
+  direction      String
+  /// text | photo | document | callback | command | system
+  messageType    String   @default("text")
+  content        String
+  /// AI/tool tafsilotlari: { ai: {...}, tools: [...], sources: [...] }
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  bot     TelegramBot     @relation(fields: [botId], references: [id], onDelete: Cascade)
+  botUser TelegramBotUser @relation(fields: [botUserId], references: [id], onDelete: Cascade)
+
+  @@index([botId, createdAt])
+  @@index([botUserId, createdAt])
+  @@map("telegram_bot_messages")
+}
+
+model TelegramBotAutomation {
+  id            String  @id @default(cuid())
+  botId         String
+  name          String
+  /// on_start | on_new_user | schedule | on_order | on_payment | on_keyword
+  trigger       String
+  triggerConfig Json    @default("{}")
+  /// Ketma-ket bajariladigan amallar
+  actions       Json    @default("[]")
+  enabled       Boolean @default(true)
+
+  lastRunAt DateTime?
+  runCount  Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@map("telegram_bot_automations")
+}
+
+/// To'lovlar. Karta ma'lumotlari HECH QACHON saqlanmaydi — faqat
+/// provayder qaytargan identifikatorlar.
+model TelegramBotPayment {
+  id                String   @id @default(cuid())
+  botId             String
+  telegramUserId    String
+  orderId           String?
+  providerPaymentId String?
+  amount            Int
+  currency          String   @default("UZS")
+  /// pending | paid | failed | refunded
+  status            String   @default("pending")
+  payload           Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId, createdAt])
+  @@map("telegram_bot_payments")
+}
+
+/// Developer mode va analitika uchun texnik hodisalar
+/// (webhook, AI chaqiruvi, tool ishlatilishi, xatolar).
+model TelegramBotEvent {
+  id        String   @id @default(cuid())
+  botId     String
+  /// webhook | ai_request | web_search | tool_call | api_call | error
+  kind      String
+  name      String
+  ok        Boolean  @default(true)
+  latencyMs Int      @default(0)
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId, kind, createdAt])
+  @@index([botId, createdAt])
+  @@map("telegram_bot_events")
+}
+
+model TelegramBotAuditLog {
+  id        String   @id @default(cuid())
+  botId     String?
+  actorId   String?
+  action    String
+  metadata  Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  bot   TelegramBot? @relation(fields: [botId], references: [id], onDelete: Cascade)
+  actor User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([botId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("telegram_bot_audit_logs")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  RASMIY QARA BOTI — onboarding va Telegram→dashboard o'tishi
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Telegramdagi onboarding suhbati holati (§59).
+///
+/// Suhbat hisobsiz boshlanadi: odam avval Telegramda gaplashadi, hisob esa
+/// faqat reja tasdiqlangandan keyin yaratiladi. Shuning uchun `userId` va
+/// `workspaceId` boshida bo'sh.
+model OnboardingSession {
+  id             String  @id @default(cuid())
+  telegramUserId String  @unique
+  chatId         String
+  userId         String?
+  workspaceId    String?
+
+  /// welcome | business_type | goals | channels | has_products | plan | done
+  currentStep String @default("welcome")
+  /// uz | ru | en — Telegram language_code dan aniqlanadi
+  lang        String @default("uz")
+
+  businessType        String?
+  businessDescription String?
+  businessStage       String?
+
+  /// Barcha javoblar: { goals: [...], channels: [...], hasProducts: bool, ... }
+  answers Json @default("{}")
+
+  /// Tuzilgan reja qoralamasi (BotBlueprint id'si)
+  blueprintId String?
+
+  /// active | planned | approved | abandoned
+  status String @default("active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("onboarding_sessions")
+}
+
+/// Telegramdan dashboardga bir martalik o'tish uchun tasodifiy tutqich (§10).
+///
+/// MUHIM: bu credential EMAS va credential o'z ichiga OLMAYDI. Bu — qisqa
+/// muddatli, bir martalik, ma'nosiz tasodifiy satr; server uni ko'rganda
+/// tegishli hisobga sessiya ochadi. Telegram deep link ichiga hech qachon
+/// token, parol yoki API kaliti qo'yilmaydi (§24, §57).
+model TelegramAccountClaim {
+  id             String    @id @default(cuid())
+  /// SHA-256 hash — asl tutqich bazada saqlanmaydi (o'g'irlansa ham foydasiz)
+  tokenHash      String    @unique
+  telegramUserId String
+  chatId         String
+  userId         String
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([telegramUserId, createdAt])
+  @@index([expiresAt])
+  @@map("telegram_account_claims")
+}
+
+/// Qayta ishlangan Telegram update'lari — takroriy yetkazishdan himoya.
+///
+/// Telegram javobni ololmasa (timeout, tarmoq uzilishi, deploy paytidagi
+/// qayta ishga tushish) AYNAN O'SHA update'ni qayta yuboradi. Dedupsiz bu
+/// ikkinchi marta xabar yuborish yoki buyurtmani ikki marta yozish demak.
+/// `(botId, updateId)` unikal bo'lgani uchun ikkinchi urinish INSERT bosqichida
+/// to'xtaydi — tekshir-keyin-yoz poygasi ham yopiladi.
+model TelegramUpdateReceipt {
+  id        String   @id @default(cuid())
+  botId     String
+  updateId  BigInt
+  createdAt DateTime @default(now())
+
+  bot TelegramBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, updateId])
+  @@index([createdAt])
+  @@map("telegram_update_receipts")
+}
+
+/// Wizard qoralamasi — brauzer yangilansa ham ma'lumot yo'qolmasin.
+/// Sirlar bu yerda saqlanmaydi: token va API kalitlari darhol
+/// `telegram_bot_secrets` ga shifrlangan holda yoziladi.
+model TelegramBotDraft {
+  id        String   @id @default(cuid())
+  ownerId   String
+  step      Int      @default(1)
+  data      Json     @default("{}")
+  /// Qoralama uchun oldindan yaratilgan bot yozuvi (sirlar shu id bilan)
+  botId     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, updatedAt])
+  @@map("telegram_bot_drafts")
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  API KALITLARI (§8) — tashqi tizimlar Qara API'siga shu kalit bilan kiradi.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Ish maydonining API kaliti.
+///
+/// Ochiq matn kalit BAZAGA YOZILMAYDI: faqat SHA-256 xesh saqlanadi, shuning
+/// uchun baza sizib chiqsa ham kalitlar ishlatib bo'lmaydigan holda qoladi.
+/// To'liq qiymat foydalanuvchiga bir marta — yaratilgan paytda ko'rsatiladi.
+///
+/// `prefix` va `lastFour` — ro'yxatda kalitni tanib olish uchun; ular sir emas
+/// va xeshni ochishga yaramaydi.
+model ApiKey {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  /// SHA-256 (hex). Qidiruv shu bo'yicha ketadi, shuning uchun unique.
+  keyHash     String    @unique
+  /// Ko'rsatish uchun boshlanish qismi, masalan `qara_sk_live`
+  prefix      String
+  /// Ko'rsatish uchun oxirgi 4 belgi
+  lastFour    String
+  createdById String?
+  lastUsedAt  DateTime?
+  /// Bekor qilingan kalit o'chirilmaydi — audit uchun qoladi, lekin ishlamaydi.
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@map("api_keys")
+}

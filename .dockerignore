@@ -1,0 +1,43 @@
+# Build kontekstini kichik saqlaymiz: bu fayllar image ichiga umuman
+# tushmasligi kerak. `.env` ni ALOHIDA e'tibor bilan chiqaramiz — sirlar
+# image qatlamlarida qolib ketmasin (runtime'da compose orqali beriladi).
+
+# Sirlar
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Bog'liqliklar va build natijalari (image ichida qaytadan yig'iladi)
+node_modules
+.next
+out
+build
+dist
+
+# Versiya nazorati va IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+.cursor
+
+# Testlar va hujjatlar runtime'ga kerak emas
+tests
+coverage
+*.md
+!README.md
+
+# Vaqtinchalik / mahalliy
+.DS_Store
+*.log
+npm-debug.log*
+*.tsbuildinfo
+.gstack
+.claude
+docker-compose*.yml
+compose*.yaml
+Dockerfile*
+.dockerignore

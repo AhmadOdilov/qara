@@ -1,0 +1,77 @@
+# Telegram Bot Builder — Docker stack
+#
+#   docker compose up -d
+#
+# Ishga tushish tartibi QAT'IY:
+#   db (healthy) → migrate (muvaffaqiyatli tugaydi) → app
+#
+# Migratsiya ALOHIDA bir martalik konteynerda ishlaydi, ilova ichida emas.
+# Sababi: bir nechta `app` nusxasi ko'tarilganda ular bir vaqtda migratsiya
+# qilishga urinib bazani buzishi mumkin. Bitta `migrate` konteyneri esa
+# ketma-ketlikni kafolatlaydi va xato bo'lsa `app` umuman ko'tarilmaydi.
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: qara-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-qara}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qara}
+      POSTGRES_DB: ${POSTGRES_DB:-qara}
+    ports:
+      # Faqat lokal interfeysga ochamiz — baza internetdan ko'rinmasin.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - qara-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qara} -d ${POSTGRES_DB:-qara}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Bir martalik migratsiya. `restart: "no"` — tugagach qayta ko'tarilmaydi.
+  migrate:
+    build:
+      context: .
+      target: migrator
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://qara:qara@db:5432/qara?schema=public}
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      target: runner
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        # Migratsiya MUVAFFAQIYATLI tugamasa ilova ko'tarilmaydi.
+        condition: service_completed_successfully
+    # .env dagi qiymatlar asos qilib olinadi...
+    env_file:
+      - .env
+    # ...lekin quyidagilar konteyner tarmog'iga moslab USTIDAN yoziladi.
+    # `localhost` konteyner ichida BOSHQA narsani anglatadi — shuning uchun
+    # baza manzili service nomi (`db`) bilan beriladi.
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://qara:qara@db:5432/qara?schema=public}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  qara-pgdata:

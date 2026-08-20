@@ -1,7 +1,20 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  /**
+   * Docker uchun `standalone`: Next butun `node_modules` o'rniga faqat
+   * ishlash uchun kerak bo'lgan fayllarni `.next/standalone` ga yig'adi.
+   * Natijada runtime image bir necha yuz MB emas, ~150-200 MB bo'ladi.
+   *
+   * Lokal `npm run dev` va `npm run start` ga ta'sir qilmaydi.
+   */
+  output: "standalone",
+
+  /**
+   * Docker build kontekstida loyiha ildizini aniq ko'rsatamiz — aks holda
+   * Next monorepo deb o'ylab `standalone` ni noto'g'ri joyga yig'ishi mumkin.
+   */
+  outputFileTracingRoot: import.meta.dirname,
 };
 
 export default nextConfig;
