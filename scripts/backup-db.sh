@@ -30,8 +30,10 @@ echo "→ zaxira: $FILE"
 
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"; then
   echo "  manba: docker konteyneri '$CONTAINER'"
+  # `-i` SHART: usiz Docker chiqish oqimini multipleks sarlavhalar bilan
+  # aralashtirib yuboradi va dump buziladi.
   # `-Fc` — custom format: siqilgan va tanlab tiklanadi.
-  docker exec "$CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc > "$FILE"
+  docker exec -i "$CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc > "$FILE"
 elif command -v pg_dump >/dev/null 2>&1; then
   echo "  manba: mahalliy pg_dump"
   : "${DATABASE_URL:?DATABASE_URL kerak (yoki docker konteynerini ishga tushiring)}"
@@ -60,8 +62,15 @@ if command -v pg_restore >/dev/null 2>&1; then
     exit 1
   fi
 elif docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"; then
-  OBJECTS=$(docker exec -i "$CONTAINER" pg_restore --list /dev/stdin < "$FILE" 2>/dev/null | grep -c "TABLE DATA" || true)
+  # `/dev/stdin` BERILMAYDI: konteyner ichida u ishlamaydi va pg_restore
+  # «did not find magic string» deb yiqiladi. Fayl nomisiz chaqirilganda
+  # pg_restore stdin'ni o'zi o'qiydi.
+  OBJECTS=$(docker exec -i "$CONTAINER" pg_restore --list < "$FILE" 2>/dev/null | grep -c "TABLE DATA" || true)
   echo "  tekshiruv: $OBJECTS ta jadval ma'lumoti"
+  if [ "${OBJECTS:-0}" -lt 1 ]; then
+    echo "✗ dump ichida jadval ma'lumoti yo'q" >&2
+    exit 1
+  fi
 fi
 
 echo "✓ tayyor: $FILE ($(du -h "$FILE" | cut -f1))"

@@ -11,7 +11,22 @@ export const SESSION_COOKIE = "qara_session";
 export const CSRF_COOKIE = "qara_csrf";
 const SESSION_TTL_DAYS = 30;
 
-const secretKey = new TextEncoder().encode(env.authSecret);
+/*
+  Imzo kaliti ham DANGASA (§P7).
+
+  Ilgari u modul darajasida hisoblanardi va `env.authSecret` ni darhol
+  o'qirdi — natijada `next build` sahifa ma'lumotini yig'ayotganda sirni
+  talab qilib yiqilardi. Endi kalit birinchi imzo/tekshiruvda hisoblanadi
+  va bir marta eslab qolinadi.
+*/
+let cachedSecretKey: Uint8Array | null = null;
+
+function secretKeyBytes(): Uint8Array {
+  if (!cachedSecretKey) {
+    cachedSecretKey = new TextEncoder().encode(env.authSecret);
+  }
+  return cachedSecretKey;
+}
 
 /**
  * Sessiya ikki qatlamli: bazadagi `sessions` yozuvi (bekor qilish uchun) va
@@ -53,7 +68,7 @@ export async function createSession(userId: string): Promise<void> {
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(expiresAt)
-    .sign(secretKey);
+    .sign(secretKeyBytes());
 
   const jar = await cookies();
   jar.set(SESSION_COOKIE, jwt, {
@@ -92,7 +107,7 @@ export async function destroySession(): Promise<void> {
 
 async function readClaims(token: string): Promise<SessionClaims | null> {
   try {
-    const { payload } = await jwtVerify(token, secretKey, {
+    const { payload } = await jwtVerify(token, secretKeyBytes(), {
       algorithms: ["HS256"],
     });
     if (typeof payload.sid === "string" && typeof payload.uid === "string") {

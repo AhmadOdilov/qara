@@ -34,6 +34,8 @@ ARGS=(--no-owner --no-privileges -d "$DB_NAME" -U "$DB_USER")
 [ "$CLEAN" = "--clean" ] && ARGS+=(--clean --if-exists)
 
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"; then
+  # Fayl nomi BERILMAYDI — pg_restore stdin'ni o'qiydi. Konteyner ichida
+  # `/dev/stdin` ishlamaydi.
   docker exec -i "$CONTAINER" pg_restore "${ARGS[@]}" < "$FILE"
 else
   : "${DATABASE_URL:?DATABASE_URL kerak}"
