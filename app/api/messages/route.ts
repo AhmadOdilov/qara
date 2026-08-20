@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { fail, guard, ok, parseBody, rateLimit, sanitizeText } from "@/lib/api";
 import { sendMessage } from "@/lib/telegram";
 import { track } from "@/lib/analytics";
+import { log } from "@/lib/log";
 
 const sendSchema = z.object({
   content: z.string().trim().min(1, "Xabar bo'sh").max(4096),
@@ -129,7 +130,9 @@ export async function POST(request: Request) {
         timestamp: true,
       },
     });
-    console.error("[messages] Telegramga yuborilmadi:", error);
+    log.error("messages: Telegramga yuborilmadi", {
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
     return ok({ message: updated, warning: reason }, { status: 502 });
   }
 }

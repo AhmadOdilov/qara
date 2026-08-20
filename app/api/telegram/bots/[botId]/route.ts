@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { safeEqual } from "@/lib/crypto";
 import { handleBotUpdate, type BotUpdate } from "@/lib/bots/runtime";
 import { claimUpdate } from "@/lib/bots/idempotency";
+import { log } from "@/lib/log";
 
 type Params = { params: Promise<{ botId: string }> };
 
@@ -47,7 +48,10 @@ export async function POST(request: Request, { params }: Params) {
   try {
     await handleBotUpdate(botId, update);
   } catch (error) {
-    console.error("[bot-webhook] update qayta ishlanmadi:", botId, error);
+    log.error("bot-webhook: update qayta ishlanmadi", {
+      botId,
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
   }
 
   return NextResponse.json({ ok: true });

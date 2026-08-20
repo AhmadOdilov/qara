@@ -15,6 +15,7 @@ import {
   TelegramApiError,
   type BotIdentity,
 } from "@/lib/bots/telegram-api";
+import { log } from "@/lib/log";
 
 /**
  * Bot konstruktorining hayot tsikli: yaratish, o'qish, yangilash, o'chirish
@@ -504,7 +505,9 @@ export async function syncCommands(botId: string, token?: string): Promise<void>
   if (!botToken) return;
 
   await setMyCommandsForBot(botToken, commands).catch((error) => {
-    console.error("[bots] setMyCommands bajarilmadi:", error);
+    log.error("bots: setMyCommands bajarilmadi", {
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
   });
 }
 

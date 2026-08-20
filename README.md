@@ -1001,3 +1001,129 @@ Ikkalasi ham sir qaytarmaydi — tekshirildi.
 
 `/api/health/ready` tugallanmagan migratsiya bo'lsa **503** qaytaradi, ya'ni
 yarim migratsiya qilingan konteyner trafik olmaydi.
+
+### To'liq deploy tartibi (noldan)
+
+Quyidagi buyruqlar `docker-compose.yml` va `docker-compose.prod.yml` ga
+100% mos — hech biri taxminiy emas.
+
+**1. Serverga Docker o'rnatish** (Ubuntu 24.04)
+
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER" && newgrp docker
+docker compose version
+```
+
+**2. Repozitoriyni olish**
+
+```bash
+sudo mkdir -p /srv/qara && sudo chown "$USER" /srv/qara
+git clone <repo> /srv/qara && cd /srv/qara
+```
+
+**3–4. Sirlarni yaratish**
+
+```bash
+cp .env.example .env
+echo "AUTH_SECRET=\"$(openssl rand -base64 32)\"" >> .env
+echo "SECRETS_KEY=\"$(openssl rand -base64 32)\"" >> .env
+```
+
+`SECRETS_KEY` ni **alohida** ham saqlang: u yo'qolsa zaxiradagi bot
+tokenlari ochilmaydi (`docs/database.md` §7).
+
+**5–8. `.env` ni to'ldirish**
+
+```env
+DATABASE_URL_DOCKER="postgresql://qara:<KUCHLI-PAROL>@db:5432/qara?schema=public"
+POSTGRES_PASSWORD="<KUCHLI-PAROL>"          # yuqoridagi bilan BIR XIL
+APP_URL="https://qara.uz"
+SITE_DOMAIN="qara.uz"
+ACME_EMAIL="admin@qara.uz"
+TRUSTED_PROXY_HOPS="1"                       # Caddy — bitta proksi
+TELEGRAM_BOT_TOKEN="…"                       # @BotFather
+TELEGRAM_WEBHOOK_SECRET="$(openssl rand -hex 16)"
+```
+
+DNS: `qara.uz` A-yozuvi server IP'siga ishora qilishi kerak — Caddy
+sertifikatni shundan keyin oladi.
+
+**9–11. Qurish va ishga tushirish**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose ps
+```
+
+Migratsiya alohida `migrate` konteynerida o'zi ishlaydi (`prisma migrate
+deploy`) va muvaffaqiyatsiz bo'lsa `app` ko'tarilmaydi — qo'lda hech narsa
+qilish shart emas.
+
+**12. Tekshirish**
+
+```bash
+docker compose logs migrate --tail=20        # "All migrations ... applied"
+docker compose run --rm migrate npx prisma migrate status
+curl -s https://qara.uz/api/health           # {"status":"ok"}
+curl -s https://qara.uz/api/health/ready     # migrations: "ok"
+curl -sI http://qara.uz | head -1            # 308 → HTTPS
+```
+
+**13. Zaxira cron'i**
+
+```bash
+mkdir -p /srv/backups
+(crontab -l 2>/dev/null; echo '0 3 * * * cd /srv/qara && ./scripts/backup-db.sh /srv/backups >> /var/log/qara-backup.log 2>&1') | crontab -
+./scripts/backup-db.sh /srv/backups          # darhol bir marta sinang
+```
+
+**14. Loglar**
+
+```bash
+docker compose logs -f app                   # produksiyada JSON
+docker compose logs app | grep '"level":"error"'
+```
+
+**15. Qayta ishga tushirish / yangilash**
+
+```bash
+git pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+`app` qayta yaratiladi, `db` tegilmaydi. Migratsiya bo'lsa `migrate`
+konteyneri uni qo'llaydi.
+
+**16. Orqaga qaytarish (rollback)**
+
+Kod darajasida:
+
+```bash
+git checkout <oldingi-commit>
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+⚠️ **Migratsiya avtomatik qaytarilmaydi.** Prisma'da `migrate down` yo'q.
+Agar yangi versiya sxemani o'zgartirgan bo'lsa, eski kod yangi sxema bilan
+ishlashi mumkin (migratsiyalar qo'shimcha) — lekin kafolat yo'q. Sxemani
+ham qaytarish kerak bo'lsa:
+
+```bash
+docker compose down                          # `-v` YO'Q — hajm saqlanadi
+./scripts/restore-db.sh /srv/backups/qara-<deploydan-oldingi>.dump --clean
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+Shuning uchun **har bir deploydan oldin zaxira oling** — 13-qadamdagi cron
+buni kunlik qiladi, lekin deploy oldidan qo'lda ham ishga tushiring.
+
+**To'xtatish**
+
+```bash
+docker compose down                          # ma'lumot saqlanadi
+docker compose down -v                       # ⚠️ HAJMNI O'CHIRADI — ishlatmang
+```

@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 import { safeEqual } from "@/lib/crypto";
 import { handleUpdate } from "@/lib/bot-handler";
 import type { TelegramUpdate } from "@/lib/telegram";
+import { log } from "@/lib/log";
 
 /**
  * Telegram webhook endpointi.
@@ -36,7 +37,9 @@ export async function POST(request: Request) {
   try {
     await handleUpdate(update);
   } catch (error) {
-    console.error("[telegram-webhook] update qayta ishlanmadi:", error);
+    log.error("telegram-webhook: update qayta ishlanmadi", {
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
   }
 
   return NextResponse.json({ ok: true });

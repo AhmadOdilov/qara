@@ -6,6 +6,7 @@ import { exchangeGoogleCode } from "@/lib/google";
 import { createSession } from "@/lib/auth";
 import { track } from "@/lib/analytics";
 import { OAUTH_STATE_COOKIE } from "../route";
+import { log } from "@/lib/log";
 
 function redirectWithError(reason: string) {
   return NextResponse.redirect(`${env.appUrl}/login?error=${reason}`, 302);
@@ -33,7 +34,9 @@ export async function GET(request: Request) {
   try {
     profile = await exchangeGoogleCode(code);
   } catch (error) {
-    console.error("[google-oauth]", error);
+    log.error("google-oauth: kirish bajarilmadi", {
+      reason: error instanceof Error ? error.message : "noma'lum",
+    });
     return redirectWithError("google_failed");
   }
 
