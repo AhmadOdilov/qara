@@ -1018,6 +1018,49 @@ ko'chiring:
 
 Zaxiralar `.gitignore` da — repozitoriyga tushmaydi.
 
+#### Diskdan tashqariga nusxa — SHART
+
+Yuqoridagi hamma narsa **bitta diskda**. Disk ishdan chiqsa yoki server
+o'chirilsa baza ham, zaxira ham birga ketadi — ya'ni bu zaxira emas.
+
+`BACKUP_MIRROR_DIR` ikkinchi manzilga nusxa ko'chiradi: boshqa disk, NFS/SMB
+ulanish nuqtasi yoki obyekt xotirasi mount'i.
+
+```cron
+0 3 * * * cd /srv/qara && BACKUP_MIRROR_DIR=/mnt/backup-nas ./scripts/backup-db.sh /srv/backups >> /var/log/qara-backup.log 2>&1
+```
+
+Nusxa ko'chmasa skript **xato bilan tugaydi** (`exit 1`) — cron jimgina
+«hammasi joyida» deb o'ylamasin. Fayl avval `.part` nomi bilan yoziladi va
+hajmi solishtirilgandan keyingina yakuniy nomga o'tadi, ya'ni yarim ko'chgan
+fayl tugallangan zaxiraga o'xshab qolmaydi. `BACKUP_MIRROR_DIR` sozlanmasa
+skript buni ochiq ogohlantiradi.
+
+**Kalitni alohida saqlang.** Dump ichidagi bot tokenlari `SECRETS_KEY` bilan
+shifrlangan. Kalit dump bilan bir joyda tursa ikkalasi birga o'g'irlanadi —
+kalitni parol menejerida yoki boshqa tizimda saqlang.
+
+#### Oylik tiklash mashqi
+
+Sinalmagan zaxira — zaxira emas. Oyiga bir marta tiklashni **toza** bazada
+tekshiring (ishlab turgan bazaga tegmaydi):
+
+```bash
+docker run -d --name qara-restore-test \
+  -e POSTGRES_USER=qara -e POSTGRES_PASSWORD=qara -e POSTGRES_DB=qara \
+  postgres:17-alpine
+
+echo ha | POSTGRES_CONTAINER=qara-restore-test \
+  ./scripts/restore-db.sh /srv/backups/qara-YYYYMMDD-HHMMSS.dump
+
+# Kutilgan: 40 jadval, 40 FK, 116 indeks, 12 migratsiya
+docker exec qara-restore-test psql -U qara -d qara -tAc \
+  "SELECT count(*) FROM information_schema.tables
+   WHERE table_schema='public' AND table_type='BASE TABLE'"
+
+docker rm -f qara-restore-test
+```
+
 ### Health endpointlari
 
 | Manzil | Nima tekshiradi | Kim ishlatadi |
