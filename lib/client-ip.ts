@@ -106,30 +106,53 @@ export function resolveClientIp(headers: Headers, config: TrustConfig): Resolved
 }
 
 /**
- * `X-Forwarded-For` va RFC 7239 `Forwarded` zanjirini bitta ro'yxatga
- * yig'adi. Tartib saqlanadi: chapda klient, o'ngda bizga eng yaqin proksi.
+ * Proksi zanjirini o'qiydi. Tartib saqlanadi: chapda klient, o'ngda bizga
+ * eng yaqin proksi.
+ *
+ * FAQAT BITTA sarlavha o'qiladi — ikkalasi HECH QACHON birlashtirilmaydi.
+ *
+ * Sababi xavfsizlik. `X-Forwarded-For` va RFC 7239 `Forwarded` — bir
+ * zanjirning ikki xil yozuvi (RFC 7239 XFF o'rnini bosish uchun yozilgan),
+ * ya'ni to'g'ri sozlangan topologiya ularning BIRINI ishlatadi. Ilgari
+ * ikkalasi ketma-ket qo'shilardi va bu zaiflik edi: `hops` o'ngdan
+ * sanaydi, bizning proksi (Caddy) esa faqat `X-Forwarded-For` yozadi —
+ * demak klient yuborgan `Forwarded: for=...` zanjirning ISHONCHLI o'ng
+ * uchiga tushib, aniqlangan IP'ni to'liq boshqarib ketardi. Natijada
+ * rate limit chelagi har so'rovda almashib, cheklov chetlab o'tilardi.
+ *
+ * Shuning uchun: proksi yozgan `X-Forwarded-For` bo'lsa — faqat o'sha
+ * o'qiladi va klientning `Forwarded` sarlavhasi butunlay e'tiborsiz
+ * qoladi. `X-Forwarded-For` umuman bo'lmaganda esa `Forwarded` yozadigan
+ * proksi ortida ishlash imkoni saqlanadi.
  */
 export function forwardedChain(headers: Headers): string[] {
-  const parts: string[] = [];
-
-  const xff = headers.get("x-forwarded-for");
-  if (xff) parts.push(...xff.split(","));
-
-  // `Forwarded: for=1.2.3.4;proto=https, for="[2001:db8::1]:443"`
-  const forwarded = headers.get("forwarded");
-  if (forwarded) {
-    for (const element of forwarded.split(",")) {
-      for (const pair of element.split(";")) {
-        const [name, ...rest] = pair.split("=");
-        if (name.trim().toLowerCase() !== "for") continue;
-        parts.push(rest.join("=").trim().replace(/^"|"$/g, ""));
-      }
-    }
-  }
+  const parts = xffEntries(headers) ?? forwardedEntries(headers) ?? [];
 
   return parts
     .map((part) => normalizeIp(part))
     .filter((value): value is string => value !== null);
+}
+
+/** `X-Forwarded-For: 1.1.1.1, 2.2.2.2` — sarlavha yo'q bo'lsa `null`. */
+function xffEntries(headers: Headers): string[] | null {
+  const xff = headers.get("x-forwarded-for");
+  return xff ? xff.split(",") : null;
+}
+
+/** `Forwarded: for=1.2.3.4;proto=https, for="[2001:db8::1]:443"` */
+function forwardedEntries(headers: Headers): string[] | null {
+  const forwarded = headers.get("forwarded");
+  if (!forwarded) return null;
+
+  const parts: string[] = [];
+  for (const element of forwarded.split(",")) {
+    for (const pair of element.split(";")) {
+      const [name, ...rest] = pair.split("=");
+      if (name.trim().toLowerCase() !== "for") continue;
+      parts.push(rest.join("=").trim().replace(/^"|"$/g, ""));
+    }
+  }
+  return parts;
 }
 
 /**

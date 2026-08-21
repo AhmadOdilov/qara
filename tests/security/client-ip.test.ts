@@ -79,6 +79,22 @@ describe("forwardedChain", () => {
     );
     assert.deepEqual(chain, ["2.2.2.2"]);
   });
+
+  it("ikkala sarlavha kelsa FAQAT X-Forwarded-For o'qiladi", () => {
+    // Bizning proksi (Caddy) `X-Forwarded-For` yozadi. Klient qo'shimcha
+    // `Forwarded` yuborsa, u zanjirga UMUMAN qo'shilmasligi kerak — aks
+    // holda `hops` o'ngdan sanagani uchun soxta qiymat ishonchli o'ng
+    // uchga tushib qolardi.
+    const chain = forwardedChain(
+      headers({ "x-forwarded-for": "198.18.0.7", forwarded: "for=9.9.9.9" }),
+    );
+    assert.deepEqual(chain, ["198.18.0.7"], "Forwarded e'tiborsiz qolishi kerak");
+  });
+
+  it("X-Forwarded-For bo'lmasa Forwarded ishlatiladi", () => {
+    const chain = forwardedChain(headers({ forwarded: "for=198.18.0.7" }));
+    assert.deepEqual(chain, ["198.18.0.7"]);
+  });
 });
 
 describe("resolveClientIp — ishonchli proksi yo'q", () => {
@@ -138,6 +154,33 @@ describe("resolveClientIp — bitta ishonchli proksi (hops = 1)", () => {
         (fake) =>
           resolveClientIp(
             headers({ "x-forwarded-for": `${fake}, 203.0.113.9` }),
+            cfg,
+          ).key,
+      ),
+    );
+    assert.deepEqual([...keys], ["203.0.113.9"]);
+  });
+
+  it("hujumchi 'Forwarded' sarlavhasi bilan o'ng uchni EGALLAY OLMAYDI", () => {
+    // Haqiqiy zaiflik edi: Caddy `X-Forwarded-For` yozadi, klient esa
+    // qo'shimcha `Forwarded` yuboradi. Ilgari ikkala sarlavha ketma-ket
+    // birlashtirilardi va klient qiymati zanjirning eng o'ngiga —
+    // ya'ni `hops` ishonchli deb bilgan joyga — tushardi.
+    const resolved = resolveClientIp(
+      headers({ "x-forwarded-for": "203.0.113.9", forwarded: "for=9.9.9.9" }),
+      cfg,
+    );
+    assert.equal(resolved.ip, "203.0.113.9", "proksi yozgan manzil g'olib bo'lishi kerak");
+    assert.notEqual(resolved.ip, "9.9.9.9", "klient yuborgan qiymat qabul qilinmasin");
+  });
+
+  it("'Forwarded' har safar o'zgarsa ham rate limit chelagi BITTA qoladi", () => {
+    // Chelak almashsa cheklovni cheksiz chetlab o'tish mumkin bo'lardi.
+    const keys = new Set(
+      ["9.9.9.1", "9.9.9.2", "9.9.9.3", "9.9.9.4"].map(
+        (fake) =>
+          resolveClientIp(
+            headers({ "x-forwarded-for": "203.0.113.9", forwarded: `for=${fake}` }),
             cfg,
           ).key,
       ),
