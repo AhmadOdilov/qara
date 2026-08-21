@@ -1073,6 +1073,33 @@ Ikkalasi ham sir qaytarmaydi — tekshirildi.
 `/api/health/ready` tugallanmagan migratsiya bo'lsa **503** qaytaradi, ya'ni
 yarim migratsiya qilingan konteyner trafik olmaydi.
 
+### Xavfsizlik E2E tekshiruvi
+
+Birlik testlar CSRF, sessiya bekor qilish va ish maydoni izolyatsiyasini
+qamrab ololmaydi — ular faqat tirik server va cookie zanjirida ma'noga ega.
+`scripts/security-e2e.sh` ishlab turgan nusxaga qarshi haqiqiy sessiyalar
+bilan ishlaydi:
+
+```bash
+./scripts/security-e2e.sh                        # lokal stack
+BASE=https://qara.uz ./scripts/security-e2e.sh   # produksiya
+```
+
+Tekshiradi: autentifikatsiyasiz kirish va buzilgan cookie → **401** · CSRF
+sarlavhasisiz, noto'g'ri yoki begona token bilan → **403** · begona ish
+maydoni resursi (GET/PATCH/DELETE) → **404** · ro'yxatlarda begona ma'lumot
+sizishi · logout'dan keyin eski cookie → **401** · admin bo'lmagan rol →
+**403**.
+
+Ikkita test foydalanuvchisi yaratiladi va mavjud ma'lumotga tegilmaydi.
+Oxirida ularni o'chiring:
+
+```sql
+DELETE FROM users WHERE email LIKE 'sec-e2e-%@example.invalid';
+```
+
+Har deploy'dan keyin ishlating — chiqish kodi 0 bo'lsa hammasi o'tgan.
+
 ### To'liq deploy tartibi (noldan)
 
 Quyidagi buyruqlar `docker-compose.yml` va `docker-compose.prod.yml` ga
